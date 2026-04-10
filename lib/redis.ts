@@ -1,16 +1,23 @@
 /**
  * Upstash Redis client + cache helpers.
- * Uses Vercel KV REST env vars (KV_REST_API_URL / KV_REST_API_TOKEN).
+ * Reads Upstash REST env vars. Supports the default prefix (KV_REST_API_*)
+ * and the custom prefix used by this Vercel project (mim_mcp_KV_REST_API_*).
  */
 import { Redis } from '@upstash/redis';
 import type { MimLead } from './attribution';
 
-const url = process.env.KV_REST_API_URL;
-const token = process.env.KV_REST_API_TOKEN;
+const url =
+  process.env.KV_REST_API_URL ||
+  process.env.mim_mcp_KV_REST_API_URL ||
+  process.env.UPSTASH_REDIS_REST_URL;
+const token =
+  process.env.KV_REST_API_TOKEN ||
+  process.env.mim_mcp_KV_REST_API_TOKEN ||
+  process.env.UPSTASH_REDIS_REST_TOKEN;
 
 if (!url || !token) {
   // Don't throw at import time — route handlers will surface a clear error.
-  console.warn('[redis] KV_REST_API_URL / KV_REST_API_TOKEN not set');
+  console.warn('[redis] Upstash REST URL/token env vars not set');
 }
 
 export const redis = new Redis({
