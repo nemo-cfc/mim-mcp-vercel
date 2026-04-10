@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "app/api/[transport]/route.ts": {
+      "maxDuration": 60
+    },
+    "app/api/refresh/route.ts": {
+      "maxDuration": 60
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/refresh",
+      "schedule": "*/30 * * * *"
+    }
+  ]
+}
