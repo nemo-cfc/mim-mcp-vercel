@@ -1,6 +1,9 @@
 /**
- * Bearer token verification for the MCP endpoint.
- * Claude.ai sends: Authorization: Bearer <MCP_BEARER_TOKEN>
+ * Token verification for the MCP endpoint.
+ * Accepts token via either:
+ *   1. Authorization: Bearer <MCP_BEARER_TOKEN>  (curl, programmatic clients)
+ *   2. ?token=<MCP_BEARER_TOKEN> query param      (Claude.ai custom connector,
+ *      which only supports OAuth or no-auth — so we embed the token in the URL)
  */
 export function verifyBearer(req: Request): { ok: true } | { ok: false; response: Response } {
   const expected = process.env.MCP_BEARER_TOKEN;
@@ -14,22 +17,34 @@ export function verifyBearer(req: Request): { ok: true } | { ok: false; response
     };
   }
 
+  // Check Authorization header
   const authHeader = req.headers.get('authorization') || '';
-  const match = authHeader.match(/^Bearer\s+(.+)$/i);
-  if (!match || match[1] !== expected) {
-    return {
-      ok: false,
-      response: new Response(JSON.stringify({ error: 'Unauthorized' }), {
-        status: 401,
-        headers: {
-          'content-type': 'application/json',
-          'www-authenticate': 'Bearer',
-        },
-      }),
-    };
+  const headerMatch = authHeader.match(/^Bearer\s+(.+)$/i);
+  if (headerMatch && headerMatch[1] === expected) {
+    return { ok: true };
   }
 
-  return { ok: true };
+  // Check ?token= query param
+  try {
+    const url = new URL(req.url);
+    const queryToken = url.searchParams.get('token');
+    if (queryToken && queryToken === expected) {
+      return { ok: true };
+    }
+  } catch {
+    // ignore URL parse errors
+  }
+
+  return {
+    ok: false,
+    response: new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: {
+        'content-type': 'application/json',
+        'www-authenticate': 'Bearer',
+      },
+    }),
+  };
 }
 
 /**
