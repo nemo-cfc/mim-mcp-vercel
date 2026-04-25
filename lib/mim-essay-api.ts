@@ -19,7 +19,7 @@ function getClient(): AxiosInstance {
       'X-API-Key': apiKey,
       'Content-Type': 'application/json',
     },
-    timeout: 30000,
+    timeout: 15000, // fail fast and retry
   });
 }
 
@@ -65,7 +65,7 @@ async function getWithRetry<T>(
   client: AxiosInstance,
   path: string,
   params: Record<string, any>,
-  maxAttempts = 4
+  maxAttempts = 3
 ): Promise<{ data: T } | null> {
   let lastErr: any;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -83,8 +83,8 @@ async function getWithRetry<T>(
         status === 504 ||
         status === 507;
       if (!retryable || attempt === maxAttempts) break;
-      // Exponential backoff: 500ms, 1s, 2s, 4s, with jitter.
-      const delay = 500 * Math.pow(2, attempt - 1) + Math.random() * 250;
+      // Short exponential backoff: 250ms, 500ms.
+      const delay = 250 * Math.pow(2, attempt - 1) + Math.random() * 100;
       await sleep(delay);
     }
   }
@@ -262,14 +262,27 @@ export async function getLeadsCached(): Promise<{
 /**
  * Refresh the cache by fetching all leads and overwriting Redis.
  * Called by the cron route. Returns a per-pipeline summary for diagnostics.
+ *
+ * `days` defaults to 90 — the cron only re-fetches recent leads. This keeps
+ * each refresh well under the function timeout. For a one-time historical
+ * load, pass a larger window or omit `days` (=> all leads).
  */
-export async function refreshLeadCache(): Promise<{
+export async function refreshLeadCache(opts?: { days?: number | null }): Promise<{
   count: number;
   updated_at: string;
   pipelines_seen: number;
   per_pipeline: FetchAllResult['per_pipeline'];
+  filters_used: LeadFilters;
 }> {
-  const r = await fetchAllLeadsWithDiagnostics();
+  const days = opts?.days === undefined ? 90 : opts.days;
+  const filters: LeadFilters = {};
+  if (days && days > 0) {
+    const since = new Date();
+    since.setDate(since.getDate() - days);
+    filters.created_after = since.toISOString().slice(0, 10);
+  }
+
+  const r = await fetchAllLeadsWithDiagnostics(filters);
   await setCachedLeads(r.leads);
   const meta = await getCacheMeta();
   return {
@@ -277,5 +290,6 @@ export async function refreshLeadCache(): Promise<{
     updated_at: meta.updated_at || new Date().toISOString(),
     pipelines_seen: r.pipelines_seen,
     per_pipeline: r.per_pipeline,
+    filters_used: filters,
   };
 }
