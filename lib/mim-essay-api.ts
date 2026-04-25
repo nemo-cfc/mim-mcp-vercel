@@ -55,6 +55,47 @@ export async function listPipelines(): Promise<Array<{ id: number | string; name
   return res.data.data || res.data.pipelines || [];
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * GET with retry + exponential backoff for transient 5xx and network errors.
+ * Specifically handles 507/503/502/504 which the CRM returns under load.
+ */
+async function getWithRetry<T>(
+  client: AxiosInstance,
+  path: string,
+  params: Record<string, any>,
+  maxAttempts = 4
+): Promise<{ data: T } | null> {
+  let lastErr: any;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const res = await client.get<T>(path, { params });
+      return { data: res.data };
+    } catch (err: any) {
+      lastErr = err;
+      const status = err?.response?.status;
+      const retryable =
+        !status || // network error / no response
+        status === 429 ||
+        status === 502 ||
+        status === 503 ||
+        status === 504 ||
+        status === 507;
+      if (!retryable || attempt === maxAttempts) break;
+      // Exponential backoff: 500ms, 1s, 2s, 4s, with jitter.
+      const delay = 500 * Math.pow(2, attempt - 1) + Math.random() * 250;
+      await sleep(delay);
+    }
+  }
+  console.warn(
+    `[mim-api] ${path} ${JSON.stringify(params)} failed after retries:`,
+    lastErr?.response?.status,
+    lastErr?.message
+  );
+  return null;
+}
+
 /**
  * Run async tasks with bounded concurrency.
  */
@@ -116,15 +157,12 @@ async function fetchPipelineLeads(
   const client = getClient();
 
   // Page 1
-  let firstRes;
-  try {
-    firstRes = await client.get<LeadsResponse>('/leads', {
-      params: buildLeadParams(pipelineId, 1, filters),
-    });
-  } catch (err: any) {
-    console.warn(`[mim-api] pipeline ${pipelineId} page 1 failed:`, err?.message);
-    return [];
-  }
+  const firstRes = await getWithRetry<LeadsResponse>(
+    client,
+    '/leads',
+    buildLeadParams(pipelineId, 1, filters)
+  );
+  if (!firstRes) return [];
 
   const firstBatch = firstRes.data.data || [];
   if (!Array.isArray(firstBatch) || firstBatch.length === 0) return [];
@@ -144,17 +182,15 @@ async function fetchPipelineLeads(
 
   const remainingPages = Array.from({ length: lastPage - 1 }, (_, i) => i + 2);
 
-  // Fetch remaining pages in parallel (8 concurrent requests per pipeline).
-  const pageResults = await runWithConcurrency(remainingPages, 8, async (page) => {
-    try {
-      const res = await client.get<LeadsResponse>('/leads', {
-        params: buildLeadParams(pipelineId, page, filters),
-      });
-      return res.data.data || [];
-    } catch (err: any) {
-      console.warn(`[mim-api] pipeline ${pipelineId} page ${page} failed:`, err?.message);
-      return [] as MimLead[];
-    }
+  // Fetch remaining pages with low concurrency (3 per pipeline) to avoid
+  // overloading the CRM, which has been returning 507 under heavy load.
+  const pageResults = await runWithConcurrency(remainingPages, 3, async (page) => {
+    const res = await getWithRetry<LeadsResponse>(
+      client,
+      '/leads',
+      buildLeadParams(pipelineId, page, filters)
+    );
+    return res?.data.data || [];
   });
 
   for (const batch of pageResults) {
@@ -169,20 +205,19 @@ async function fetchPipelineLeads(
 
 /**
  * Fetch ALL leads across ALL pipelines.
- * Pipelines are fetched in parallel with bounded concurrency.
  * Used by the cron refresh and as fallback when cache is empty.
+ *
+ * Concurrency: pipelines run sequentially, pages within each pipeline run 3 at
+ * a time. This caps in-flight requests at 3 — conservative but the CRM returned
+ * HTTP 507 under more aggressive parallelism.
  */
 export async function fetchAllLeads(filters?: LeadFilters): Promise<MimLead[]> {
   const pipelines = await listPipelines();
-
-  // Up to 4 pipelines in flight at once. Combined with 8 concurrent pages per
-  // pipeline, this caps total in-flight requests at ~32 — fast but still polite.
-  const perPipelineResults = await runWithConcurrency(pipelines, 4, (p) =>
-    fetchPipelineLeads(p.id, p.name, filters)
-  );
-
   const all: MimLead[] = [];
-  for (const leads of perPipelineResults) all.push(...leads);
+  for (const p of pipelines) {
+    const leads = await fetchPipelineLeads(p.id, p.name, filters);
+    all.push(...leads);
+  }
   return all;
 }
 
