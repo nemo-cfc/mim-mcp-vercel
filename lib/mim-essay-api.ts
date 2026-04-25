@@ -56,7 +56,52 @@ export async function listPipelines(): Promise<Array<{ id: number | string; name
 }
 
 /**
- * Fetch all leads for a given pipeline, paginated.
+ * Run async tasks with bounded concurrency.
+ */
+async function runWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  async function runOne(): Promise<void> {
+    while (true) {
+      const i = nextIndex++;
+      if (i >= items.length) return;
+      results[i] = await worker(items[i], i);
+    }
+  }
+  const runners = Array.from({ length: Math.min(limit, items.length) }, () => runOne());
+  await Promise.all(runners);
+  return results;
+}
+
+function buildLeadParams(
+  pipelineId: number | string,
+  page: number,
+  filters?: LeadFilters
+): Record<string, any> {
+  return {
+    pipeline_id: pipelineId,
+    page,
+    count: PAGE_SIZE, // spec: `count`, max 200
+    ...(filters?.created_after && { created_after: filters.created_after }),
+    ...(filters?.created_before && { created_before: filters.created_before }),
+    ...(filters?.booked_after && { booked_after: filters.booked_after }),
+    ...(filters?.booked_before && { booked_before: filters.booked_before }),
+    ...(filters?.stage_id && { stage_id: filters.stage_id }),
+    ...(filters?.source && { source: filters.source }),
+    ...(filters?.query && { query: filters.query }),
+  };
+}
+
+/**
+ * Fetch all leads for a given pipeline.
+ * Strategy:
+ *   1. Fetch page 1 to learn `pagination.last_page`.
+ *   2. Fetch pages 2..last_page in parallel with bounded concurrency.
+ *
  * Per spec (https://www.mim-essay.com/external/leads): page-size param is `count` (max 200,
  * default 50), date filters are `created_after`/`created_before`/`booked_after`/`booked_before`,
  * pagination metadata is in `pagination.last_page`.
@@ -69,51 +114,54 @@ async function fetchPipelineLeads(
   filters?: LeadFilters
 ): Promise<MimLead[]> {
   const client = getClient();
+
+  // Page 1
+  let firstRes;
+  try {
+    firstRes = await client.get<LeadsResponse>('/leads', {
+      params: buildLeadParams(pipelineId, 1, filters),
+    });
+  } catch (err: any) {
+    console.warn(`[mim-api] pipeline ${pipelineId} page 1 failed:`, err?.message);
+    return [];
+  }
+
+  const firstBatch = firstRes.data.data || [];
+  if (!Array.isArray(firstBatch) || firstBatch.length === 0) return [];
+
   const all: MimLead[] = [];
-  let page = 1;
-  let lastPage = 1; // updated from server response after first page
-  // Hard cap to prevent runaway loops on malformed responses.
+  for (const lead of firstBatch) {
+    lead._pipeline_name = pipelineName;
+    all.push(lead);
+  }
+
+  // Determine how many more pages we need.
+  let lastPage = firstRes.data.pagination?.last_page ?? 1;
+  // Safety cap.
   const MAX_PAGES = 500;
+  if (lastPage > MAX_PAGES) lastPage = MAX_PAGES;
+  if (lastPage <= 1) return all;
 
-  while (page <= MAX_PAGES) {
-    const params: Record<string, any> = {
-      pipeline_id: pipelineId,
-      page,
-      count: PAGE_SIZE, // spec: `count`, max 200
-      ...(filters?.created_after && { created_after: filters.created_after }),
-      ...(filters?.created_before && { created_before: filters.created_before }),
-      ...(filters?.booked_after && { booked_after: filters.booked_after }),
-      ...(filters?.booked_before && { booked_before: filters.booked_before }),
-      ...(filters?.stage_id && { stage_id: filters.stage_id }),
-      ...(filters?.source && { source: filters.source }),
-      ...(filters?.query && { query: filters.query }),
-    };
+  const remainingPages = Array.from({ length: lastPage - 1 }, (_, i) => i + 2);
 
-    let res;
+  // Fetch remaining pages in parallel (8 concurrent requests per pipeline).
+  const pageResults = await runWithConcurrency(remainingPages, 8, async (page) => {
     try {
-      res = await client.get<LeadsResponse>('/leads', { params });
+      const res = await client.get<LeadsResponse>('/leads', {
+        params: buildLeadParams(pipelineId, page, filters),
+      });
+      return res.data.data || [];
     } catch (err: any) {
-      // Some pipelines may not be accessible — skip silently.
       console.warn(`[mim-api] pipeline ${pipelineId} page ${page} failed:`, err?.message);
-      break;
+      return [] as MimLead[];
     }
+  });
 
-    const batch = res.data.data || [];
-    if (!Array.isArray(batch) || batch.length === 0) break;
-
+  for (const batch of pageResults) {
     for (const lead of batch) {
       lead._pipeline_name = pipelineName;
       all.push(lead);
     }
-
-    // Use server-reported pagination if present, else fall back to short-batch check.
-    if (res.data.pagination?.last_page) {
-      lastPage = res.data.pagination.last_page;
-      if (page >= lastPage) break;
-    } else if (batch.length < PAGE_SIZE) {
-      break;
-    }
-    page++;
   }
 
   return all;
@@ -121,18 +169,20 @@ async function fetchPipelineLeads(
 
 /**
  * Fetch ALL leads across ALL pipelines.
+ * Pipelines are fetched in parallel with bounded concurrency.
  * Used by the cron refresh and as fallback when cache is empty.
  */
 export async function fetchAllLeads(filters?: LeadFilters): Promise<MimLead[]> {
   const pipelines = await listPipelines();
+
+  // Up to 4 pipelines in flight at once. Combined with 8 concurrent pages per
+  // pipeline, this caps total in-flight requests at ~32 — fast but still polite.
+  const perPipelineResults = await runWithConcurrency(pipelines, 4, (p) =>
+    fetchPipelineLeads(p.id, p.name, filters)
+  );
+
   const all: MimLead[] = [];
-
-  // Sequential to avoid hammering the CRM API.
-  for (const p of pipelines) {
-    const leads = await fetchPipelineLeads(p.id, p.name, filters);
-    all.push(...leads);
-  }
-
+  for (const leads of perPipelineResults) all.push(...leads);
   return all;
 }
 
