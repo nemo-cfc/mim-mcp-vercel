@@ -203,22 +203,37 @@ async function fetchPipelineLeads(
   return all;
 }
 
+export interface FetchAllResult {
+  leads: MimLead[];
+  pipelines_seen: number;
+  per_pipeline: Array<{ id: number | string; name: string; count: number }>;
+}
+
 /**
- * Fetch ALL leads across ALL pipelines.
- * Used by the cron refresh and as fallback when cache is empty.
+ * Fetch ALL leads across ALL pipelines, returning leads + a per-pipeline summary
+ * for diagnostics.
  *
  * Concurrency: pipelines run sequentially, pages within each pipeline run 3 at
  * a time. This caps in-flight requests at 3 — conservative but the CRM returned
  * HTTP 507 under more aggressive parallelism.
  */
-export async function fetchAllLeads(filters?: LeadFilters): Promise<MimLead[]> {
+export async function fetchAllLeadsWithDiagnostics(
+  filters?: LeadFilters
+): Promise<FetchAllResult> {
   const pipelines = await listPipelines();
-  const all: MimLead[] = [];
+  const leads: MimLead[] = [];
+  const perPipeline: FetchAllResult['per_pipeline'] = [];
   for (const p of pipelines) {
-    const leads = await fetchPipelineLeads(p.id, p.name, filters);
-    all.push(...leads);
+    const pipelineLeads = await fetchPipelineLeads(p.id, p.name, filters);
+    leads.push(...pipelineLeads);
+    perPipeline.push({ id: p.id, name: p.name, count: pipelineLeads.length });
   }
-  return all;
+  return { leads, pipelines_seen: pipelines.length, per_pipeline: perPipeline };
+}
+
+export async function fetchAllLeads(filters?: LeadFilters): Promise<MimLead[]> {
+  const r = await fetchAllLeadsWithDiagnostics(filters);
+  return r.leads;
 }
 
 /**
@@ -246,11 +261,21 @@ export async function getLeadsCached(): Promise<{
 
 /**
  * Refresh the cache by fetching all leads and overwriting Redis.
- * Called by the cron route.
+ * Called by the cron route. Returns a per-pipeline summary for diagnostics.
  */
-export async function refreshLeadCache(): Promise<{ count: number; updated_at: string }> {
-  const fresh = await fetchAllLeads();
-  await setCachedLeads(fresh);
+export async function refreshLeadCache(): Promise<{
+  count: number;
+  updated_at: string;
+  pipelines_seen: number;
+  per_pipeline: FetchAllResult['per_pipeline'];
+}> {
+  const r = await fetchAllLeadsWithDiagnostics();
+  await setCachedLeads(r.leads);
   const meta = await getCacheMeta();
-  return { count: fresh.length, updated_at: meta.updated_at || new Date().toISOString() };
+  return {
+    count: r.leads.length,
+    updated_at: meta.updated_at || new Date().toISOString(),
+    pipelines_seen: r.pipelines_seen,
+    per_pipeline: r.per_pipeline,
+  };
 }
