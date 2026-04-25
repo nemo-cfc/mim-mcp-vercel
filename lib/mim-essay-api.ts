@@ -29,11 +29,24 @@ interface ListPipelinesResponse {
 }
 
 interface LeadsResponse {
+  success?: boolean;
   data?: MimLead[];
-  leads?: MimLead[];
-  total?: number;
-  current_page?: number;
-  last_page?: number;
+  pagination?: {
+    current_page: number;
+    per_page: number;
+    total: number;
+    last_page: number;
+  };
+}
+
+export interface LeadFilters {
+  created_after?: string;
+  created_before?: string;
+  booked_after?: string;
+  booked_before?: string;
+  stage_id?: number | string;
+  source?: string;
+  query?: string;
 }
 
 export async function listPipelines(): Promise<Array<{ id: number | string; name: string }>> {
@@ -44,27 +57,37 @@ export async function listPipelines(): Promise<Array<{ id: number | string; name
 
 /**
  * Fetch all leads for a given pipeline, paginated.
+ * Per spec (https://www.mim-essay.com/external/leads): page-size param is `count` (max 200,
+ * default 50), date filters are `created_after`/`created_before`/`booked_after`/`booked_before`,
+ * pagination metadata is in `pagination.last_page`.
+ *
  * The CRM returns nested objects (pipeline, stage); we flatten _pipeline_name for convenience.
  */
 async function fetchPipelineLeads(
   pipelineId: number | string,
   pipelineName: string,
-  filters?: { from?: string; to?: string }
+  filters?: LeadFilters
 ): Promise<MimLead[]> {
   const client = getClient();
   const all: MimLead[] = [];
   let page = 1;
-  // Cap pages to avoid runaway loops on bad responses.
-  const MAX_PAGES = 200;
+  let lastPage = 1; // updated from server response after first page
+  // Hard cap to prevent runaway loops on malformed responses.
+  const MAX_PAGES = 500;
 
   while (page <= MAX_PAGES) {
     const params: Record<string, any> = {
       pipeline_id: pipelineId,
       page,
-      per_page: PAGE_SIZE,
+      count: PAGE_SIZE, // spec: `count`, max 200
+      ...(filters?.created_after && { created_after: filters.created_after }),
+      ...(filters?.created_before && { created_before: filters.created_before }),
+      ...(filters?.booked_after && { booked_after: filters.booked_after }),
+      ...(filters?.booked_before && { booked_before: filters.booked_before }),
+      ...(filters?.stage_id && { stage_id: filters.stage_id }),
+      ...(filters?.source && { source: filters.source }),
+      ...(filters?.query && { query: filters.query }),
     };
-    if (filters?.from) params.from = filters.from;
-    if (filters?.to) params.to = filters.to;
 
     let res;
     try {
@@ -75,7 +98,7 @@ async function fetchPipelineLeads(
       break;
     }
 
-    const batch = res.data.data || res.data.leads || [];
+    const batch = res.data.data || [];
     if (!Array.isArray(batch) || batch.length === 0) break;
 
     for (const lead of batch) {
@@ -83,7 +106,13 @@ async function fetchPipelineLeads(
       all.push(lead);
     }
 
-    if (batch.length < PAGE_SIZE) break;
+    // Use server-reported pagination if present, else fall back to short-batch check.
+    if (res.data.pagination?.last_page) {
+      lastPage = res.data.pagination.last_page;
+      if (page >= lastPage) break;
+    } else if (batch.length < PAGE_SIZE) {
+      break;
+    }
     page++;
   }
 
@@ -94,7 +123,7 @@ async function fetchPipelineLeads(
  * Fetch ALL leads across ALL pipelines.
  * Used by the cron refresh and as fallback when cache is empty.
  */
-export async function fetchAllLeads(filters?: { from?: string; to?: string }): Promise<MimLead[]> {
+export async function fetchAllLeads(filters?: LeadFilters): Promise<MimLead[]> {
   const pipelines = await listPipelines();
   const all: MimLead[] = [];
 
