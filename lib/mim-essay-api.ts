@@ -216,17 +216,32 @@ export interface FetchAllResult {
  * Concurrency: pipelines run sequentially, pages within each pipeline run 3 at
  * a time. This caps in-flight requests at 3 — conservative but the CRM returned
  * HTTP 507 under more aggressive parallelism.
+ *
+ * `onPipelineDone` lets the caller persist partial progress (e.g. write to
+ * Redis after each pipeline) so a function timeout doesn't lose all data.
  */
 export async function fetchAllLeadsWithDiagnostics(
-  filters?: LeadFilters
+  filters?: LeadFilters,
+  onPipelineDone?: (
+    pipelineLeads: MimLead[],
+    accumulated: MimLead[],
+    info: { id: number | string; name: string; count: number; ms: number }
+  ) => Promise<void> | void
 ): Promise<FetchAllResult> {
   const pipelines = await listPipelines();
+  console.log(`[mim-api] fetchAll: ${pipelines.length} pipelines, filters=${JSON.stringify(filters)}`);
   const leads: MimLead[] = [];
   const perPipeline: FetchAllResult['per_pipeline'] = [];
   for (const p of pipelines) {
+    const t0 = Date.now();
     const pipelineLeads = await fetchPipelineLeads(p.id, p.name, filters);
+    const ms = Date.now() - t0;
     leads.push(...pipelineLeads);
     perPipeline.push({ id: p.id, name: p.name, count: pipelineLeads.length });
+    console.log(`[mim-api] pipeline "${p.name}" (id=${p.id}): ${pipelineLeads.length} leads in ${ms}ms`);
+    if (onPipelineDone) {
+      await onPipelineDone(pipelineLeads, leads, { id: p.id, name: p.name, count: pipelineLeads.length, ms });
+    }
   }
   return { leads, pipelines_seen: pipelines.length, per_pipeline: perPipeline };
 }
@@ -274,7 +289,7 @@ export async function refreshLeadCache(opts?: { days?: number | null }): Promise
   per_pipeline: FetchAllResult['per_pipeline'];
   filters_used: LeadFilters;
 }> {
-  const days = opts?.days === undefined ? 90 : opts.days;
+  const days = opts?.days === undefined ? 30 : opts.days;
   const filters: LeadFilters = {};
   if (days && days > 0) {
     const since = new Date();
@@ -282,7 +297,15 @@ export async function refreshLeadCache(opts?: { days?: number | null }): Promise
     filters.created_after = since.toISOString().slice(0, 10);
   }
 
-  const r = await fetchAllLeadsWithDiagnostics(filters);
+  // Persist incrementally after each pipeline so a function timeout still
+  // leaves a partial cache instead of nothing.
+  const r = await fetchAllLeadsWithDiagnostics(filters, async (_pipelineLeads, accumulated) => {
+    try {
+      await setCachedLeads(accumulated);
+    } catch (e: any) {
+      console.warn('[refresh] partial cache write failed:', e?.message);
+    }
+  });
   await setCachedLeads(r.leads);
   const meta = await getCacheMeta();
   return {
