@@ -35,18 +35,49 @@ const handler = createMcpHandler(
     // =============================================================================
     server.tool(
       'get_combined_dashboard',
-      'Combined Volume + Quality marketing dashboard for a date range. Joins MiM Essay CRM leads with Meta Ads spend (per ad/lane) and Google Ads spend, computes CPL/CPQL/good-rate, identifies WINNER and KILL ads using the kill matrix, and includes AI-generated commentary. Single source of truth for daily reporting.',
+      'Combined Volume + Quality marketing dashboard with 14-day decay context. Joins MiM Essay CRM leads with Meta Ads spend (per ad/lane) and Google Ads spend; computes CPL/CPQL/good-rate, lane breakdown, top WINNER/KILL ads, daily trend, and decay alerts (CPL drift vs 7d avg, frequency velocity, CTR decay, CPM drift). Pass focal_date to get decay metrics for that specific day vs trailing 7d/14d. If only focal_date is given (no from/to), the report uses a 14-day window ending on focal_date.',
       {
-        from: z.string().describe('Start date (YYYY-MM-DD)'),
-        to: z.string().describe('End date (YYYY-MM-DD)'),
+        from: z.string().optional().describe('Start date YYYY-MM-DD. If omitted with focal_date, defaults to 13 days before focal_date.'),
+        to: z.string().optional().describe('End date YYYY-MM-DD. If omitted with focal_date, defaults to focal_date.'),
+        focal_date: z
+          .string()
+          .optional()
+          .describe('Focal day for decay analysis (YYYY-MM-DD). Trailing 7d/14d averages are computed against this day.'),
         include_insights: z
           .boolean()
           .optional()
           .default(true)
           .describe('Generate Gemini-written commentary (default true)'),
+        include_daily_trend: z
+          .boolean()
+          .optional()
+          .default(true)
+          .describe('Include per-day breakdown of leads/spend/CPL/CTR/freq (default true)'),
       },
-      async ({ from, to, include_insights }) => {
-        const dashboard = await buildVolumeReport({ from, to }, { includeInsights: include_insights });
+      async ({ from, to, focal_date, include_insights, include_daily_trend }) => {
+        // If focal_date is given but range is not, default to 14 days ending focal_date.
+        if (focal_date && (!from || !to)) {
+          const fd = new Date(focal_date + 'T00:00:00Z');
+          if (!from) {
+            const f = new Date(fd);
+            f.setUTCDate(f.getUTCDate() - 13);
+            from = f.toISOString().slice(0, 10);
+          }
+          if (!to) to = focal_date;
+        }
+        if (!from || !to) {
+          return jsonText({
+            error: 'Provide either {from, to} or focal_date (or both).',
+          });
+        }
+        const dashboard = await buildVolumeReport(
+          { from, to },
+          {
+            includeInsights: include_insights,
+            includeDailyTrend: include_daily_trend,
+            focalDate: focal_date,
+          }
+        );
         return jsonText(dashboard);
       }
     );

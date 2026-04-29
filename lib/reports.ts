@@ -12,7 +12,12 @@
  */
 import { fetchLeadsForRange } from './mim-essay-api';
 import { enrichLead, isMimEssayLead, type MimLead, type EnrichedLead } from './attribution';
-import { getMetaSpendByAd, getGoogleAdsCampaignMetrics, type MetaInsightRow } from './pipeboard';
+import {
+  getMetaSpendByAd,
+  getMetaInsights,
+  getGoogleAdsCampaignMetrics,
+  type MetaInsightRow,
+} from './pipeboard';
 import { generateMarketingInsight } from './gemini';
 
 // =============================================================================
@@ -124,8 +129,38 @@ export interface VolumeReport {
   notes: string[];
 }
 
+export interface DailyTrendRow {
+  date: string;
+  leads: number;
+  qualified: number;
+  good: number;
+  spend_meta: number;
+  spend_google: number;
+  spend_total: number;
+  cpl: number;
+  cpql: number;
+  cpm: number;
+  ctr: number;
+  frequency: number;
+  impressions: number;
+}
+
+export interface DecayContext {
+  focal_date: string;
+  cpl: { focal: number; avg_7d: number; avg_14d: number; drift_pct_vs_7d: number; alert: boolean };
+  cpql: { focal: number; avg_7d: number; drift_pct: number; alert: boolean };
+  frequency: { focal: number; avg_7d: number; velocity_per_day: number; alert: boolean };
+  ctr: { focal: number; avg_7d: number; decay_pct: number; alert: boolean };
+  cpm: { focal: number; avg_7d: number; drift_pct: number; alert: boolean };
+  good_rate: { focal: number; avg_7d: number; drop_pp: number; alert: boolean };
+  notes: string[];
+}
+
 export interface CombinedDashboard extends VolumeReport {
+  focal_date?: string;
   stage_distribution: Array<{ stage: string; count: number; pct: number }>;
+  daily_trend?: DailyTrendRow[];
+  decay?: DecayContext;
   insights?: string;
 }
 
@@ -159,7 +194,7 @@ function attachChannelSpend(
 
 export async function buildVolumeReport(
   range: DateRange,
-  opts?: { includeInsights?: boolean }
+  opts?: { includeInsights?: boolean; focalDate?: string; includeDailyTrend?: boolean }
 ): Promise<CombinedDashboard> {
   // Parallelize the three fetches.
   const [crmRes, metaAds, googleRows] = await Promise.all([
@@ -396,6 +431,228 @@ export async function buildVolumeReport(
     notes,
   };
 
+  // ----------------------------------------------------------------------------
+  // Daily trend (per-day slice) and decay context (focal day vs trailing window)
+  // ----------------------------------------------------------------------------
+  const wantTrend = opts?.includeDailyTrend !== false; // default on
+  const focalDate = opts?.focalDate;
+  if (wantTrend) {
+    try {
+      const dailyMeta = await getMetaInsights({
+        from: range.from,
+        to: range.to,
+        level: 'account',
+        time_breakdown: 'day',
+        limit: 200,
+      });
+      // Index Meta daily totals by date.
+      type DailyMetaAgg = {
+        spend: number;
+        impressions: number;
+        clicks: number;
+        ctr: number;
+        cpm: number;
+        frequency: number;
+        rows: number;
+      };
+      const metaByDate = new Map<string, DailyMetaAgg>();
+      for (const r of dailyMeta) {
+        const date = (r.date_start || '').slice(0, 10);
+        if (!date) continue;
+        if (!metaByDate.has(date)) {
+          metaByDate.set(date, {
+            spend: 0,
+            impressions: 0,
+            clicks: 0,
+            ctr: 0,
+            cpm: 0,
+            frequency: 0,
+            rows: 0,
+          });
+        }
+        const agg = metaByDate.get(date)!;
+        agg.spend += Number(r.spend || 0);
+        agg.impressions += Number(r.impressions || 0);
+        agg.clicks += Number(r.clicks || 0);
+        agg.ctr += Number(r.ctr || 0);
+        agg.cpm += Number(r.cpm || 0);
+        agg.frequency += Number(r.frequency || 0);
+        agg.rows++;
+      }
+
+      // Index Google daily by date.
+      const googleByDate = new Map<string, number>();
+      for (const r of googleRows) {
+        const date = (r.date || '').toString().slice(0, 10);
+        if (!date) continue;
+        googleByDate.set(date, (googleByDate.get(date) || 0) + (Number(r.cost) || 0));
+      }
+
+      // Index CRM by date.
+      type DailyCrmAgg = { leads: number; qualified: number; good: number };
+      const crmByDate = new Map<string, DailyCrmAgg>();
+      for (const l of enriched) {
+        const d = (l.created_at || '').slice(0, 10);
+        if (!d) continue;
+        if (!crmByDate.has(d)) crmByDate.set(d, { leads: 0, qualified: 0, good: 0 });
+        const a = crmByDate.get(d)!;
+        a.leads++;
+        if (l.is_qualified) a.qualified++;
+        if (l.is_good) a.good++;
+      }
+
+      // Build daily rows in order from->to.
+      const allDates: string[] = [];
+      const start = new Date(range.from + 'T00:00:00Z');
+      const end = new Date(range.to + 'T00:00:00Z');
+      for (let d = new Date(start); d <= end; d.setUTCDate(d.getUTCDate() + 1)) {
+        allDates.push(d.toISOString().slice(0, 10));
+      }
+
+      const daily_trend: DailyTrendRow[] = allDates.map((date) => {
+        const m = metaByDate.get(date);
+        const c = crmByDate.get(date) || { leads: 0, qualified: 0, good: 0 };
+        const g = googleByDate.get(date) || 0;
+        const meta_spend = m?.spend ?? 0;
+        const total_spend = meta_spend + g;
+        // CTR/CPM/frequency at account level — average across rows for that date.
+        const ctr = m && m.rows > 0 ? m.ctr / m.rows : 0;
+        const cpm = m && m.rows > 0 ? m.cpm / m.rows : 0;
+        const frequency = m && m.rows > 0 ? m.frequency / m.rows : 0;
+        return {
+          date,
+          leads: c.leads,
+          qualified: c.qualified,
+          good: c.good,
+          spend_meta: +meta_spend.toFixed(2),
+          spend_google: +g.toFixed(2),
+          spend_total: +total_spend.toFixed(2),
+          cpl: c.leads > 0 ? +(total_spend / c.leads).toFixed(2) : 0,
+          cpql: c.qualified > 0 ? +(total_spend / c.qualified).toFixed(2) : 0,
+          cpm: +cpm.toFixed(2),
+          ctr: +ctr.toFixed(2),
+          frequency: +frequency.toFixed(2),
+          impressions: m?.impressions ?? 0,
+        };
+      });
+
+      dashboard.daily_trend = daily_trend;
+
+      // ---- Decay context (only if focalDate is supplied and present in trend) ----
+      if (focalDate) {
+        const focalRow = daily_trend.find((d) => d.date === focalDate);
+        if (focalRow) {
+          const focalIdx = daily_trend.findIndex((d) => d.date === focalDate);
+          const last7 = daily_trend.slice(Math.max(0, focalIdx - 7), focalIdx); // up to 7 prior days
+          const last14 = daily_trend.slice(Math.max(0, focalIdx - 14), focalIdx);
+          const avg = (xs: number[]) =>
+            xs.length > 0 ? xs.reduce((a, b) => a + b, 0) / xs.length : 0;
+
+          const cpl7 = avg(last7.filter((d) => d.cpl > 0).map((d) => d.cpl));
+          const cpl14 = avg(last14.filter((d) => d.cpl > 0).map((d) => d.cpl));
+          const cplDrift = cpl7 > 0 ? +(((focalRow.cpl - cpl7) / cpl7) * 100).toFixed(2) : 0;
+
+          const cpql7 = avg(last7.filter((d) => d.cpql > 0).map((d) => d.cpql));
+          const cpqlDrift =
+            cpql7 > 0 ? +(((focalRow.cpql - cpql7) / cpql7) * 100).toFixed(2) : 0;
+
+          const freq7 = avg(last7.map((d) => d.frequency));
+          // Velocity: simple slope of last 7 days frequency
+          const freqVelocity = (() => {
+            const xs = last7.map((d) => d.frequency);
+            if (xs.length < 2) return 0;
+            const n = xs.length;
+            const meanY = xs.reduce((a, b) => a + b, 0) / n;
+            const meanX = (n - 1) / 2;
+            let num = 0,
+              den = 0;
+            for (let i = 0; i < n; i++) {
+              num += (i - meanX) * (xs[i] - meanY);
+              den += (i - meanX) ** 2;
+            }
+            return den > 0 ? +(num / den).toFixed(3) : 0;
+          })();
+
+          const ctr7 = avg(last7.filter((d) => d.ctr > 0).map((d) => d.ctr));
+          const ctrDecay = ctr7 > 0 ? +(((focalRow.ctr - ctr7) / ctr7) * 100).toFixed(2) : 0;
+
+          const cpm7 = avg(last7.filter((d) => d.cpm > 0).map((d) => d.cpm));
+          const cpmDrift = cpm7 > 0 ? +(((focalRow.cpm - cpm7) / cpm7) * 100).toFixed(2) : 0;
+
+          const goodRate = (row: DailyTrendRow) =>
+            row.leads > 0 ? (row.good / row.leads) * 100 : 0;
+          const focalGoodRate = +goodRate(focalRow).toFixed(2);
+          const goodRate7 = avg(last7.map(goodRate));
+          const goodDropPp = +(focalGoodRate - goodRate7).toFixed(2);
+
+          const decayNotes: string[] = [];
+          if (cplDrift > 50) decayNotes.push(`CPL up ${cplDrift}% vs 7d avg — kill candidate.`);
+          if (cpqlDrift > 50) decayNotes.push(`CPQL up ${cpqlDrift}% vs 7d avg.`);
+          if (focalRow.frequency > 3.0)
+            decayNotes.push(
+              `Frequency at ${focalRow.frequency.toFixed(2)} (>3.0 fatigue threshold).`
+            );
+          if (freqVelocity > 0.05)
+            decayNotes.push(`Frequency rising ${(freqVelocity * 7).toFixed(2)}/wk.`);
+          if (ctrDecay < -25) decayNotes.push(`CTR down ${Math.abs(ctrDecay)}% vs 7d avg.`);
+          if (cpmDrift > 30) decayNotes.push(`CPM up ${cpmDrift}% vs 7d avg.`);
+          if (goodDropPp < -5)
+            decayNotes.push(
+              `Good rate dropped ${Math.abs(goodDropPp)}pp vs 7d avg (${focalGoodRate}% vs ${goodRate7.toFixed(2)}%).`
+            );
+
+          dashboard.focal_date = focalDate;
+          dashboard.decay = {
+            focal_date: focalDate,
+            cpl: {
+              focal: focalRow.cpl,
+              avg_7d: +cpl7.toFixed(2),
+              avg_14d: +cpl14.toFixed(2),
+              drift_pct_vs_7d: cplDrift,
+              alert: cplDrift > 50,
+            },
+            cpql: {
+              focal: focalRow.cpql,
+              avg_7d: +cpql7.toFixed(2),
+              drift_pct: cpqlDrift,
+              alert: cpqlDrift > 50,
+            },
+            frequency: {
+              focal: focalRow.frequency,
+              avg_7d: +freq7.toFixed(2),
+              velocity_per_day: freqVelocity,
+              alert: focalRow.frequency > 3.0 || freqVelocity > 0.05,
+            },
+            ctr: {
+              focal: focalRow.ctr,
+              avg_7d: +ctr7.toFixed(2),
+              decay_pct: ctrDecay,
+              alert: ctrDecay < -25,
+            },
+            cpm: {
+              focal: focalRow.cpm,
+              avg_7d: +cpm7.toFixed(2),
+              drift_pct: cpmDrift,
+              alert: cpmDrift > 30,
+            },
+            good_rate: {
+              focal: focalGoodRate,
+              avg_7d: +goodRate7.toFixed(2),
+              drop_pp: goodDropPp,
+              alert: goodDropPp < -5,
+            },
+            notes: decayNotes,
+          };
+        } else {
+          notes.push(`focal_date ${focalDate} is outside the date_range; decay not computed.`);
+        }
+      }
+    } catch (e: any) {
+      console.warn('[reports] daily-trend / decay failed:', e?.message);
+      notes.push(`Daily trend unavailable: ${e?.message || 'unknown'}`);
+    }
+  }
+
   if (opts?.includeInsights !== false) {
     try {
       dashboard.insights = await generateMarketingInsight({
@@ -405,7 +662,9 @@ export async function buildVolumeReport(
         meta_lanes,
         google: google_ads,
         top_ads: top_ads.slice(0, 10),
-        notes: notes.join('; '),
+        notes: [...notes, dashboard.decay ? `Decay alerts: ${dashboard.decay.notes.join(' ')}` : '']
+          .filter(Boolean)
+          .join('; '),
       });
     } catch (e: any) {
       console.warn('[reports] insights generation failed:', e?.message);
