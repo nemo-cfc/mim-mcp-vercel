@@ -5,7 +5,7 @@
  */
 import axios, { AxiosInstance } from 'axios';
 import type { MimLead } from './attribution';
-import { getCachedLeads, setCachedLeads, getCacheMeta } from './redis';
+import { getCachedLeads, setCachedLeads, getCacheMeta, redis } from './redis';
 
 const BASE_URL = 'https://www.mim-essay.com/external';
 const PAGE_SIZE = 200;
@@ -252,9 +252,60 @@ export async function fetchAllLeads(filters?: LeadFilters): Promise<MimLead[]> {
 }
 
 /**
- * Get leads with cache-first strategy:
- * 1. Try Redis cache
- * 2. If empty/missing, fetch fresh and populate cache
+ * On-demand fetch for a date range. Cached in Redis with a short TTL keyed by
+ * the from/to/dateField triple so repeated tool calls in quick succession
+ * don't hammer the CRM.
+ *
+ * Replaces the old "cache everything, refresh via cron" model. Each tool call
+ * gets exactly the leads it needs (small payload, fast response).
+ */
+const RANGE_TTL_SECONDS = 30 * 60; // 30 min
+
+export async function fetchLeadsForRange(opts: {
+  from: string; // YYYY-MM-DD
+  to: string;
+  dateField?: 'created_at' | 'booked_at';
+}): Promise<{ leads: MimLead[]; source: 'cache' | 'fresh'; pipelines_seen: number }> {
+  const dateField = opts.dateField || 'created_at';
+  const cacheKey = `mim:range:${dateField}:${opts.from}:${opts.to}`;
+
+  // Try Redis range cache first.
+  try {
+    const cached = await redis.get<{ leads: MimLead[]; pipelines_seen: number }>(cacheKey);
+    if (cached && Array.isArray(cached.leads)) {
+      return { leads: cached.leads, source: 'cache', pipelines_seen: cached.pipelines_seen };
+    }
+  } catch (e: any) {
+    console.warn('[mim-api] range cache read failed:', e?.message);
+  }
+
+  // Build CRM filter for the requested range.
+  const filters: LeadFilters = {};
+  if (dateField === 'booked_at') {
+    filters.booked_after = opts.from;
+    filters.booked_before = opts.to;
+  } else {
+    filters.created_after = opts.from;
+    filters.created_before = opts.to;
+  }
+
+  const r = await fetchAllLeadsWithDiagnostics(filters);
+
+  // Cache the result (best-effort, never blocks).
+  try {
+    await redis.set(cacheKey, { leads: r.leads, pipelines_seen: r.pipelines_seen }, {
+      ex: RANGE_TTL_SECONDS,
+    });
+  } catch (e: any) {
+    console.warn('[mim-api] range cache write failed:', e?.message);
+  }
+
+  return { leads: r.leads, source: 'fresh', pipelines_seen: r.pipelines_seen };
+}
+
+/**
+ * Legacy cache-first fetch (kept for backward compat with old tools).
+ * New code should use fetchLeadsForRange().
  */
 export async function getLeadsCached(): Promise<{
   leads: MimLead[];
@@ -266,9 +317,10 @@ export async function getLeadsCached(): Promise<{
     const meta = await getCacheMeta();
     return { leads: cached, source: 'cache', cache_meta: meta };
   }
-
-  // Cache miss — fetch fresh and store.
-  const fresh = await fetchAllLeads();
+  // Cache miss — fetch a 30-day window so we don't hang.
+  const since = new Date();
+  since.setDate(since.getDate() - 30);
+  const fresh = await fetchAllLeads({ created_after: since.toISOString().slice(0, 10) });
   await setCachedLeads(fresh);
   const meta = await getCacheMeta();
   return { leads: fresh, source: 'fresh', cache_meta: meta };

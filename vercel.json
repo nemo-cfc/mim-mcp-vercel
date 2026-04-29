@@ -4,13 +4,7 @@
       "maxDuration": 60
     },
     "app/api/refresh/route.ts": {
-      "maxDuration": 300
+      "maxDuration": 60
     }
-  },
-  "crons": [
-    {
-      "path": "/api/refresh",
-      "schedule": "*/30 * * * *"
-    }
-  ]
+  }
 }
