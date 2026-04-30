@@ -60,6 +60,7 @@ export function DateControls(props: {
   from: string;
   to: string;
   focal: string;
+  dateField: 'created_at' | 'booked_at';
   loading?: boolean;
 }) {
   const router = useRouter();
@@ -67,12 +68,14 @@ export function DateControls(props: {
   const [from, setFrom] = useState(props.from);
   const [to, setTo] = useState(props.to);
   const [focal, setFocal] = useState(props.focal);
+  const [dateField, setDateField] = useState<'created_at' | 'booked_at'>(props.dateField);
 
   function apply() {
     const params = new URLSearchParams();
     if (from) params.set('from', from);
     if (to) params.set('to', to);
     if (focal) params.set('focal', focal);
+    if (dateField === 'booked_at') params.set('date_field', 'booked_at');
     startTransition(() => {
       router.push(`/dashboard?${params.toString()}`);
     });
@@ -125,6 +128,9 @@ export function DateControls(props: {
       </Field>
       <Field label="To">
         <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={inputStyle} />
+      </Field>
+      <Field label="Date field">
+        <DateFieldToggle value={dateField} onChange={setDateField} />
       </Field>
       <button
         onClick={apply}
@@ -180,6 +186,50 @@ const inputStyle: React.CSSProperties = {
   fontSize: 13,
   fontFamily: 'inherit',
 };
+
+function DateFieldToggle(props: {
+  value: 'created_at' | 'booked_at';
+  onChange: (v: 'created_at' | 'booked_at') => void;
+}) {
+  const opts: Array<{ v: 'created_at' | 'booked_at'; label: string }> = [
+    { v: 'created_at', label: 'Created at' },
+    { v: 'booked_at', label: 'Booked at' },
+  ];
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        border: '1px solid #ddd',
+        borderRadius: 8,
+        overflow: 'hidden',
+        height: 32,
+      }}
+    >
+      {opts.map((o, i) => {
+        const active = props.value === o.v;
+        return (
+          <button
+            key={o.v}
+            type="button"
+            onClick={() => props.onChange(o.v)}
+            style={{
+              padding: '0 12px',
+              fontSize: 12,
+              fontWeight: 600,
+              cursor: 'pointer',
+              border: 0,
+              borderLeft: i > 0 ? '1px solid #ddd' : 0,
+              background: active ? '#111' : '#fff',
+              color: active ? '#fff' : '#444',
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // SummaryCards

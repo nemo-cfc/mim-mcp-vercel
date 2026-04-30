@@ -34,7 +34,7 @@ function daysAgo(d: string, n: number): string {
 }
 
 export default async function DashboardPage(props: {
-  searchParams: { from?: string; to?: string; focal?: string };
+  searchParams: { from?: string; to?: string; focal?: string; date_field?: string };
 }) {
   if (!isAuthed()) redirect('/login');
 
@@ -44,13 +44,20 @@ export default async function DashboardPage(props: {
   const focal = props.searchParams.focal || defaultFocal;
   const to = props.searchParams.to || focal;
   const from = props.searchParams.from || daysAgo(to, 13);
+  const dateField: 'created_at' | 'booked_at' =
+    props.searchParams.date_field === 'booked_at' ? 'booked_at' : 'created_at';
 
   let data: any = null;
   let error: string | null = null;
   try {
     data = await buildVolumeReport(
       { from, to },
-      { focalDate: focal, includeDailyTrend: true, includeInsights: true }
+      {
+        focalDate: focal,
+        includeDailyTrend: true,
+        includeInsights: true,
+        dateField,
+      }
     );
   } catch (e: any) {
     error = e?.message || 'unknown';
@@ -82,6 +89,8 @@ export default async function DashboardPage(props: {
                 <>
                   Window <strong>{from}</strong> to <strong>{to}</strong>
                   {focal && <> · focal <strong>{focal}</strong></>}
+                  {' · grouped by '}
+                  <strong>{dateField === 'booked_at' ? 'booked at' : 'created at'}</strong>
                 </>
               ) : (
                 'Loading…'
@@ -90,7 +99,7 @@ export default async function DashboardPage(props: {
           </div>
         </header>
 
-        <DateControls from={from} to={to} focal={focal} />
+        <DateControls from={from} to={to} focal={focal} dateField={dateField} />
 
         {error && (
           <div

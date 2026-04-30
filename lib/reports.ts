@@ -158,6 +158,7 @@ export interface DecayContext {
 
 export interface CombinedDashboard extends VolumeReport {
   focal_date?: string;
+  date_field?: 'created_at' | 'booked_at';
   stage_distribution: Array<{ stage: string; count: number; pct: number }>;
   daily_trend?: DailyTrendRow[];
   decay?: DecayContext;
@@ -194,14 +195,25 @@ function attachChannelSpend(
 
 export async function buildVolumeReport(
   range: DateRange,
-  opts?: { includeInsights?: boolean; focalDate?: string; includeDailyTrend?: boolean }
+  opts?: {
+    includeInsights?: boolean;
+    focalDate?: string;
+    includeDailyTrend?: boolean;
+    /**
+     * Which CRM date field to filter & group leads by. Defaults to 'created_at'.
+     * 'booked_at' = leads grouped by when the call was booked (useful when
+     * comparing against ad spend on the booking day rather than the creation day).
+     */
+    dateField?: 'created_at' | 'booked_at';
+  }
 ): Promise<CombinedDashboard> {
+  const dateField = opts?.dateField || 'created_at';
   // Parallelize the three fetches. Capture upstream errors so we can surface
   // them in the response notes (otherwise empty arrays look identical to "no
   // spend in this window" which is misleading).
   const upstreamErrors: { meta?: string; google?: string } = {};
   const [crmRes, metaAds, googleRows] = await Promise.all([
-    fetchLeadsForRange({ from: range.from, to: range.to, dateField: 'created_at' }),
+    fetchLeadsForRange({ from: range.from, to: range.to, dateField }),
     getMetaSpendByAd(range.from, range.to).catch((e) => {
       upstreamErrors.meta = e?.message || 'unknown';
       console.warn('[reports] Meta fetch failed:', upstreamErrors.meta);
@@ -220,8 +232,9 @@ export async function buildVolumeReport(
   for (const lead of crmRes.leads) {
     if (!isMimEssayLead(lead)) continue;
     const e = enrichLead(lead);
-    const d = dailyDate(e.created_at);
-    if (d < range.from || d > range.to) continue;
+    const dateVal = dateField === 'booked_at' ? e.booked_at : e.created_at;
+    const d = dailyDate(dateVal || '');
+    if (!d || d < range.from || d > range.to) continue;
     enriched.push({ ...e, ad_id: extractAdId(e.source) });
   }
 
@@ -427,6 +440,7 @@ export async function buildVolumeReport(
 
   const dashboard: CombinedDashboard = {
     date_range: range,
+    date_field: dateField,
     totals,
     channels,
     meta_lanes,
@@ -493,11 +507,12 @@ export async function buildVolumeReport(
         googleByDate.set(date, (googleByDate.get(date) || 0) + (Number(r.cost) || 0));
       }
 
-      // Index CRM by date.
+      // Index CRM by date — using whichever date field the report is keyed on.
       type DailyCrmAgg = { leads: number; qualified: number; good: number };
       const crmByDate = new Map<string, DailyCrmAgg>();
       for (const l of enriched) {
-        const d = (l.created_at || '').slice(0, 10);
+        const dateVal = dateField === 'booked_at' ? l.booked_at : l.created_at;
+        const d = (dateVal || '').slice(0, 10);
         if (!d) continue;
         if (!crmByDate.has(d)) crmByDate.set(d, { leads: 0, qualified: 0, good: 0 });
         const a = crmByDate.get(d)!;

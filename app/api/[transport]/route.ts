@@ -43,6 +43,9 @@ const handler = createMcpHandler(
           .string()
           .optional()
           .describe('Focal day for decay analysis (YYYY-MM-DD). Trailing 7d/14d averages are computed against this day.'),
+        date_field: dateFieldSchema.describe(
+          'Which CRM date to filter/group leads by. created_at = lead creation, booked_at = call booking date.'
+        ),
         include_insights: z
           .boolean()
           .optional()
@@ -54,7 +57,7 @@ const handler = createMcpHandler(
           .default(true)
           .describe('Include per-day breakdown of leads/spend/CPL/CTR/freq (default true)'),
       },
-      async ({ from, to, focal_date, include_insights, include_daily_trend }) => {
+      async ({ from, to, focal_date, date_field, include_insights, include_daily_trend }) => {
         // If focal_date is given but range is not, default to 14 days ending focal_date.
         if (focal_date && (!from || !to)) {
           const fd = new Date(focal_date + 'T00:00:00Z');
@@ -76,6 +79,7 @@ const handler = createMcpHandler(
             includeInsights: include_insights,
             includeDailyTrend: include_daily_trend,
             focalDate: focal_date,
+            dateField: date_field as DateField,
           }
         );
         return jsonText(dashboard);
