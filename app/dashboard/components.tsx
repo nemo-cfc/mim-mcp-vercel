@@ -288,10 +288,93 @@ export function SummaryCards(props: {
 }
 
 // ---------------------------------------------------------------------------
-// Daily Trend SVG chart — leads (line) + spend (line)
+// Focal Day Cards — snapshot of the specific day being audited
+// ---------------------------------------------------------------------------
+export function FocalDayCards(props: {
+  focalDate: string;
+  daily: any[];
+  dateField: string;
+}) {
+  const row = props.daily.find((d) => d.date === props.focalDate);
+  if (!row) return null;
+  const dfLabel = props.dateField === 'booked_at' ? 'booked' : 'created';
+  const cards = [
+    {
+      k: `Leads ${dfLabel} that day`,
+      v: fmt(row.leads),
+      d: `${row.qualified} qualified · ${row.good} good`,
+    },
+    {
+      k: 'Spend that day',
+      v: '₹' + fmt(row.spend_total),
+      d: `Meta ₹${fmt(row.spend_meta)} · Google ₹${fmt(row.spend_google)}`,
+    },
+    {
+      k: 'CPL',
+      v: row.cpl > 0 ? '₹' + fmt(row.cpl) : '—',
+      d: 'spend ÷ leads',
+    },
+    {
+      k: 'CPQL',
+      v: row.cpql > 0 ? '₹' + fmt(row.cpql) : '—',
+      d: 'cost per qualified lead',
+    },
+    {
+      k: 'CTR',
+      v: row.ctr > 0 ? row.ctr + '%' : '—',
+      d: `freq ${fmt(row.frequency)} · CPM ₹${fmt(row.cpm)}`,
+    },
+    {
+      k: 'Impressions',
+      v: fmt(row.impressions),
+      d: `${row.leads > 0 ? fmt(row.impressions / row.leads) : '—'} impr / lead`,
+    },
+  ];
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div
+        style={{
+          fontSize: 12,
+          color: '#666',
+          margin: '4px 0 6px',
+          fontWeight: 600,
+          textTransform: 'uppercase',
+        }}
+      >
+        Focal day — {props.focalDate}
+      </div>
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 12,
+        }}
+      >
+        {cards.map((c) => (
+          <div
+            key={c.k}
+            style={{
+              ...styles.card,
+              borderColor: '#fde68a',
+              background: '#fffbeb',
+            }}
+          >
+            <div style={styles.k}>{c.k}</div>
+            <div style={styles.v}>{c.v}</div>
+            <div style={styles.d}>{c.d}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Daily Trend SVG chart — leads (line) + spend (line) + focal day marker
 // ---------------------------------------------------------------------------
 export function TrendChart(props: {
   daily: Array<{ date: string; leads: number; spend_total: number }>;
+  focalDate?: string;
 }) {
   const data = props.daily;
   if (!data.length) return null;
@@ -330,6 +413,37 @@ export function TrendChart(props: {
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block' }}>
         <line x1={PAD_L} y1={PAD_T + innerH} x2={PAD_L + innerW} y2={PAD_T + innerH} stroke="#ddd" />
+        {/* Focal day vertical marker */}
+        {props.focalDate &&
+          (() => {
+            const idx = data.findIndex((d) => d.date === props.focalDate);
+            if (idx < 0) return null;
+            const fx = x(idx);
+            return (
+              <g>
+                <line
+                  x1={fx}
+                  y1={PAD_T}
+                  x2={fx}
+                  y2={PAD_T + innerH}
+                  stroke="#dc2626"
+                  strokeWidth={1.5}
+                  strokeDasharray="2 3"
+                  opacity={0.6}
+                />
+                <text
+                  x={fx}
+                  y={PAD_T - 4}
+                  fontSize={10}
+                  fill="#dc2626"
+                  textAnchor="middle"
+                  fontWeight="600"
+                >
+                  focal
+                </text>
+              </g>
+            );
+          })()}
         <path d={leadsPath} stroke="#16794c" strokeWidth={2} fill="none" />
         <path d={spendPath} stroke="#2563eb" strokeWidth={2} fill="none" strokeDasharray="4 3" />
         {data.map((d, i) =>
@@ -596,6 +710,79 @@ export function ChannelTable(props: { channels: any[] }) {
                 <td style={styles.tdNum}>{c.good_rate}%</td>
               </tr>
             ))}
+          </tbody>
+        </table>
+      </ScrollX>
+    </Section>
+  );
+}
+
+export function DailyTrendTable(props: {
+  daily: Array<any>;
+  focalDate?: string;
+}) {
+  if (!props.daily?.length) return null;
+  return (
+    <Section title="Daily breakdown">
+      <ScrollX>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Date</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Leads</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Qual</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Good</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Spend Meta</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Spend Google</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Spend Total</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>CPL</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>CPQL</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>CTR</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>CPM</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Freq</th>
+            </tr>
+          </thead>
+          <tbody>
+            {props.daily.map((d) => {
+              const isFocal = d.date === props.focalDate;
+              return (
+                <tr
+                  key={d.date}
+                  style={
+                    isFocal
+                      ? { background: '#fffbeb', fontWeight: 600 }
+                      : undefined
+                  }
+                >
+                  <td style={styles.td}>
+                    {d.date}
+                    {isFocal && (
+                      <span
+                        style={{
+                          marginLeft: 6,
+                          fontSize: 10,
+                          color: '#dc2626',
+                          fontWeight: 700,
+                        }}
+                      >
+                        ◆ focal
+                      </span>
+                    )}
+                  </td>
+                  <td style={styles.tdNum}>{d.leads}</td>
+                  <td style={styles.tdNum}>{d.qualified}</td>
+                  <td style={styles.tdNum}>{d.good}</td>
+                  <td style={styles.tdNum}>₹{fmt(d.spend_meta)}</td>
+                  <td style={styles.tdNum}>₹{fmt(d.spend_google)}</td>
+                  <td style={styles.tdNum}>₹{fmt(d.spend_total)}</td>
+                  <td style={styles.tdNum}>{d.cpl > 0 ? '₹' + fmt(d.cpl) : '—'}</td>
+                  <td style={styles.tdNum}>{d.cpql > 0 ? '₹' + fmt(d.cpql) : '—'}</td>
+                  <td style={styles.tdNum}>{d.ctr > 0 ? d.ctr + '%' : '—'}</td>
+                  <td style={styles.tdNum}>{d.cpm > 0 ? '₹' + fmt(d.cpm) : '—'}</td>
+                  <td style={styles.tdNum}>{fmt(d.frequency)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </ScrollX>

@@ -10,7 +10,9 @@ import { buildVolumeReport } from '@/lib/reports';
 import {
   DateControls,
   SummaryCards,
+  FocalDayCards,
   TrendChart,
+  DailyTrendTable,
   DecayPanel,
   MetaLaneTable,
   TopAdsTable,
@@ -120,14 +122,29 @@ export default async function DashboardPage(props: {
         {data && (
           <>
             {data.notes?.length > 0 && <NotesBanner notes={data.notes} />}
+
+            {/* Focal-day snapshot — shows the audited day's numbers prominently */}
+            {data.focal_date && data.daily_trend?.length > 0 && (
+              <FocalDayCards
+                focalDate={data.focal_date}
+                daily={data.daily_trend}
+                dateField={data.date_field || 'created_at'}
+              />
+            )}
+
+            {/* Window totals — full date range aggregate */}
+            <div style={{ fontSize: 12, color: '#666', margin: '4px 0 6px', fontWeight: 600, textTransform: 'uppercase' }}>
+              Window totals ({from} to {to})
+            </div>
             <SummaryCards
               totals={data.totals}
               dateRange={data.date_range}
               focalDate={data.focal_date}
             />
+
             {data.daily_trend?.length > 0 && (
               <div style={{ marginBottom: 16 }}>
-                <TrendChart daily={data.daily_trend} />
+                <TrendChart daily={data.daily_trend} focalDate={data.focal_date} />
               </div>
             )}
             {data.decay && <DecayPanel decay={data.decay} />}
@@ -135,6 +152,9 @@ export default async function DashboardPage(props: {
             <MetaLaneTable lanes={data.meta_lanes} />
             <TopAdsTable ads={data.top_ads} />
             <ChannelTable channels={data.channels} />
+            {data.daily_trend?.length > 0 && (
+              <DailyTrendTable daily={data.daily_trend} focalDate={data.focal_date} />
+            )}
             <StageDistribution stages={data.stage_distribution} />
           </>
         )}
