@@ -1,33 +1,55 @@
 export default function Home() {
   return (
-    <main style={{ fontFamily: 'system-ui, sans-serif', padding: '2rem', maxWidth: 720 }}>
-      <h1>MiM Essay MCP Server</h1>
-      <p>
-        This is a remote MCP server for MiM Essay CRM analytics. It is designed to be added as a
-        Custom Connector in Claude.ai.
+    <main
+      style={{
+        fontFamily: '-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif',
+        padding: '2rem',
+        maxWidth: 720,
+        margin: '0 auto',
+        color: '#111',
+      }}
+    >
+      <h1 style={{ marginBottom: 4 }}>MiM Essay MCP</h1>
+      <p style={{ color: '#555', marginTop: 0 }}>
+        Marketing dashboard + remote MCP server for MiM Essay.
       </p>
-      <h2>Endpoints</h2>
-      <ul>
+
+      <div style={{ marginTop: 24, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+        <a
+          href="/dashboard"
+          style={{
+            padding: '10px 16px',
+            background: '#111',
+            color: '#fff',
+            borderRadius: 8,
+            textDecoration: 'none',
+            fontWeight: 600,
+            fontSize: 14,
+          }}
+        >
+          Open dashboard →
+        </a>
+      </div>
+
+      <h2 style={{ marginTop: 32, fontSize: 18 }}>For Claude.ai</h2>
+      <p style={{ fontSize: 13, color: '#444' }}>
+        Add a custom connector pointing at <code>/api/mcp?token=&lt;MCP_BEARER_TOKEN&gt;</code>.
+        The connector exposes tools for{' '}
+        <code>get_combined_dashboard</code>, <code>get_volume_report</code>,{' '}
+        <code>get_quality_report</code>, <code>get_leads</code>,{' '}
+        <code>get_meta_ad_spend</code>, <code>get_google_ads_spend</code>.
+      </p>
+
+      <h2 style={{ marginTop: 32, fontSize: 18 }}>Endpoints</h2>
+      <ul style={{ fontSize: 13, color: '#444' }}>
         <li>
-          <code>POST /api/mcp</code> — MCP HTTP transport (bearer auth required)
+          <code>POST /api/mcp</code> — MCP HTTP transport (bearer auth)
         </li>
         <li>
-          <code>GET /api/sse</code> — MCP SSE transport (bearer auth required)
+          <code>GET /dashboard</code> — Web dashboard (cookie auth, falls back to /login)
         </li>
         <li>
-          <code>GET /api/refresh</code> — Cron-triggered cache refresh (cron secret required)
-        </li>
-      </ul>
-      <h2>Tools</h2>
-      <ul>
-        <li>
-          <code>get_leads</code> — enriched leads filtered by date range
-        </li>
-        <li>
-          <code>get_marketing_dashboard</code> — channel-wise totals + qualified/good rates
-        </li>
-        <li>
-          <code>get_channel_matrix</code> — channel matrix only
+          <code>GET /api/refresh</code> — Cron-triggered cache refresh (legacy, optional)
         </li>
       </ul>
     </main>
