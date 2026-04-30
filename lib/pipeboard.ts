@@ -42,6 +42,15 @@ async function callTool(baseUrl: string, name: string, args: Record<string, any>
   if (res.data?.error) {
     throw new Error(`Pipeboard ${name} error: ${JSON.stringify(res.data.error)}`);
   }
+  // Pipeboard signals upstream errors via `result.isError = true` while still
+  // returning HTTP 200. Surface those clearly so users know the data is bad.
+  if (res.data?.result?.isError) {
+    const errText =
+      res.data.result.content?.[0]?.text ||
+      res.data.result.structuredContent?.error_description ||
+      'upstream error';
+    throw new Error(`Pipeboard ${name} upstream error: ${errText}`);
+  }
   const content = res.data?.result?.content;
   if (!Array.isArray(content) || content.length === 0) {
     throw new Error(`Pipeboard ${name}: empty result`);
@@ -101,6 +110,10 @@ export async function getMetaInsights(opts: {
     level: opts.level || 'ad',
     limit: opts.limit ?? 500,
   };
+  // If a Meta access token is provided directly via env, bypass Pipeboard's
+  // cached token — useful when that cached token has expired.
+  const directToken = process.env.META_ACCESS_TOKEN;
+  if (directToken) args.access_token = directToken;
   if (opts.time_breakdown) args.time_breakdown = opts.time_breakdown;
   const result = await callTool(META_URL, 'get_insights', args);
   // Pipeboard returns either { data: [...] } or just an array depending on tool;
@@ -179,15 +192,26 @@ export async function getGoogleAdsCampaignMetrics(opts: {
   };
 
   const result = await callTool(GOOGLE_URL, 'get_google_ads_campaign_metrics', args);
-  const raw: GoogleCampaignMetricsRow[] = Array.isArray(result)
-    ? result
-    : Array.isArray(result?.data)
-    ? result.data
-    : Array.isArray(result?.metrics)
-    ? result.metrics
-    : Array.isArray(result?.campaigns)
-    ? result.campaigns
-    : [];
+  // When time_breakdown is set, Pipeboard returns:
+  //   { campaigns: [{ id, name, ... no metrics }],
+  //     segmented_metrics: [{ date, cost, impressions, ... }, ...] }
+  // Otherwise:
+  //   { campaigns: [{ id, name, cost, impressions, ... }, ...] }
+  // Pick the one that actually has the metrics for this request.
+  let raw: GoogleCampaignMetricsRow[];
+  if (Array.isArray(result?.segmented_metrics) && result.segmented_metrics.length > 0) {
+    raw = result.segmented_metrics;
+  } else if (Array.isArray(result?.campaigns)) {
+    raw = result.campaigns;
+  } else if (Array.isArray(result?.data)) {
+    raw = result.data;
+  } else if (Array.isArray(result?.metrics)) {
+    raw = result.metrics;
+  } else if (Array.isArray(result)) {
+    raw = result;
+  } else {
+    raw = [];
+  }
 
   // Filter by date if `date` field exists.
   const filtered = raw.filter((r) => {
@@ -203,6 +227,8 @@ export async function getGoogleAdsCampaignMetrics(opts: {
         ? r.cost
         : typeof r.cost_micros === 'number'
         ? r.cost_micros / 1_000_000
+        : typeof r.cost_micros === 'string'
+        ? Number(r.cost_micros) / 1_000_000
         : 0;
     return { ...r, cost };
   });

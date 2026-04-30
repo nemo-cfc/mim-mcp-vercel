@@ -196,15 +196,20 @@ export async function buildVolumeReport(
   range: DateRange,
   opts?: { includeInsights?: boolean; focalDate?: string; includeDailyTrend?: boolean }
 ): Promise<CombinedDashboard> {
-  // Parallelize the three fetches.
+  // Parallelize the three fetches. Capture upstream errors so we can surface
+  // them in the response notes (otherwise empty arrays look identical to "no
+  // spend in this window" which is misleading).
+  const upstreamErrors: { meta?: string; google?: string } = {};
   const [crmRes, metaAds, googleRows] = await Promise.all([
     fetchLeadsForRange({ from: range.from, to: range.to, dateField: 'created_at' }),
     getMetaSpendByAd(range.from, range.to).catch((e) => {
-      console.warn('[reports] Meta fetch failed:', e?.message);
+      upstreamErrors.meta = e?.message || 'unknown';
+      console.warn('[reports] Meta fetch failed:', upstreamErrors.meta);
       return [] as Awaited<ReturnType<typeof getMetaSpendByAd>>;
     }),
     getGoogleAdsCampaignMetrics({ from: range.from, to: range.to }).catch((e) => {
-      console.warn('[reports] Google fetch failed:', e?.message);
+      upstreamErrors.google = e?.message || 'unknown';
+      console.warn('[reports] Google fetch failed:', upstreamErrors.google);
       return [] as Awaited<ReturnType<typeof getGoogleAdsCampaignMetrics>>;
     }),
   ]);
