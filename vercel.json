@@ -5,9 +5,6 @@
     },
     "app/api/refresh/route.ts": {
       "maxDuration": 60
-    },
-    "app/api/enrich-lead/route.ts": {
-      "maxDuration": 30
     }
   }
 }
