@@ -205,16 +205,22 @@ export async function buildVolumeReport(
      * comparing against ad spend on the booking day rather than the creation day).
      */
     dateField?: 'created_at' | 'booked_at';
+    /**
+     * Optional per-call Meta Graph API access token override. Falls back to
+     * the META_ACCESS_TOKEN env var, then Pipeboard's cached token.
+     */
+    metaAccessToken?: string;
   }
 ): Promise<CombinedDashboard> {
   const dateField = opts?.dateField || 'created_at';
+  const metaAccessToken = opts?.metaAccessToken;
   // Parallelize the three fetches. Capture upstream errors so we can surface
   // them in the response notes (otherwise empty arrays look identical to "no
   // spend in this window" which is misleading).
   const upstreamErrors: { meta?: string; google?: string } = {};
   const [crmRes, metaAds, googleRows] = await Promise.all([
     fetchLeadsForRange({ from: range.from, to: range.to, dateField }),
-    getMetaSpendByAd(range.from, range.to).catch((e) => {
+    getMetaSpendByAd(range.from, range.to, metaAccessToken).catch((e) => {
       upstreamErrors.meta = e?.message || 'unknown';
       console.warn('[reports] Meta fetch failed:', upstreamErrors.meta);
       return [] as Awaited<ReturnType<typeof getMetaSpendByAd>>;
@@ -463,6 +469,7 @@ export async function buildVolumeReport(
         level: 'account',
         time_breakdown: 'day',
         limit: 200,
+        access_token: metaAccessToken,
       });
       // Index Meta daily totals by date.
       type DailyMetaAgg = {

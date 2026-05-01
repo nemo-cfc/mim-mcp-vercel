@@ -46,6 +46,12 @@ const handler = createMcpHandler(
         date_field: dateFieldSchema.describe(
           'Which CRM date to filter/group leads by. created_at = lead creation, booked_at = call booking date.'
         ),
+        meta_access_token: z
+          .string()
+          .optional()
+          .describe(
+            'Optional Meta Graph API access token override. If omitted, the deployment-wide META_ACCESS_TOKEN env var is used (and falls back to Pipeboard\'s cached token).'
+          ),
         include_insights: z
           .boolean()
           .optional()
@@ -57,7 +63,7 @@ const handler = createMcpHandler(
           .default(true)
           .describe('Include per-day breakdown of leads/spend/CPL/CTR/freq (default true)'),
       },
-      async ({ from, to, focal_date, date_field, include_insights, include_daily_trend }) => {
+      async ({ from, to, focal_date, date_field, meta_access_token, include_insights, include_daily_trend }) => {
         // If focal_date is given but range is not, default to 14 days ending focal_date.
         if (focal_date && (!from || !to)) {
           const fd = new Date(focal_date + 'T00:00:00Z');
@@ -80,6 +86,7 @@ const handler = createMcpHandler(
             includeDailyTrend: include_daily_trend,
             focalDate: focal_date,
             dateField: date_field as DateField,
+            metaAccessToken: meta_access_token,
           }
         );
         return jsonText(dashboard);
@@ -223,9 +230,13 @@ const handler = createMcpHandler(
       {
         from: z.string().describe('Start date (YYYY-MM-DD)'),
         to: z.string().describe('End date (YYYY-MM-DD)'),
+        meta_access_token: z
+          .string()
+          .optional()
+          .describe('Optional Meta Graph API access token override.'),
       },
-      async ({ from, to }) => {
-        const ads = await getMetaSpendByAd(from, to);
+      async ({ from, to, meta_access_token }) => {
+        const ads = await getMetaSpendByAd(from, to, meta_access_token);
         const totalSpend = ads.reduce((s, a) => s + a.spend, 0);
         return jsonText({
           date_range: { from, to },

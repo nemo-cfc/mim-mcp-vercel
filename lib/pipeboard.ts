@@ -102,6 +102,12 @@ export async function getMetaInsights(opts: {
   account_id?: string;
   time_breakdown?: 'day' | 'week' | 'month';
   limit?: number;
+  /**
+   * Optional per-call Meta Graph API access token override.
+   * Falls back to META_ACCESS_TOKEN env var if not provided.
+   * If neither is set, Pipeboard's cached token is used.
+   */
+  access_token?: string;
 }): Promise<MetaInsightRow[]> {
   const accountId = opts.account_id || process.env.META_AD_ACCOUNT_ID || 'act_509761434701737';
   const args: Record<string, any> = {
@@ -110,9 +116,11 @@ export async function getMetaInsights(opts: {
     level: opts.level || 'ad',
     limit: opts.limit ?? 500,
   };
-  // If a Meta access token is provided directly via env, bypass Pipeboard's
-  // cached token — useful when that cached token has expired.
-  const directToken = process.env.META_ACCESS_TOKEN;
+  // Token resolution order:
+  //   1. Explicit per-call override (opts.access_token)
+  //   2. Server-wide env var (META_ACCESS_TOKEN)
+  //   3. Pipeboard's cached token (no access_token sent)
+  const directToken = opts.access_token || process.env.META_ACCESS_TOKEN;
   if (directToken) args.access_token = directToken;
   if (opts.time_breakdown) args.time_breakdown = opts.time_breakdown;
   const result = await callTool(META_URL, 'get_insights', args);
@@ -126,9 +134,10 @@ export async function getMetaInsights(opts: {
 
 /**
  * Convenience wrapper: total spend across all ads in date range.
+ * Optional metaAccessToken to override the env var per-call.
  */
-export async function getMetaSpendByAd(from: string, to: string) {
-  const rows = await getMetaInsights({ from, to, level: 'ad' });
+export async function getMetaSpendByAd(from: string, to: string, metaAccessToken?: string) {
+  const rows = await getMetaInsights({ from, to, level: 'ad', access_token: metaAccessToken });
   return rows.map((r) => ({
     ad_id: String(r.ad_id || ''),
     ad_name: String(r.ad_name || ''),
