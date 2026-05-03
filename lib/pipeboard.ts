@@ -124,6 +124,31 @@ export async function getMetaInsights(opts: {
   if (directToken) args.access_token = directToken;
   if (opts.time_breakdown) args.time_breakdown = opts.time_breakdown;
   const result = await callTool(META_URL, 'get_insights', args);
+
+  // When time_breakdown is set, Pipeboard returns:
+  //   { data: [],
+  //     segmented_metrics: [
+  //       { period: "2026-05-02", period_start, period_end,
+  //         metrics: { spend, impressions, ctr, ... } },
+  //       ...
+  //     ],
+  //     aggregates: { spend, impressions, ... } }
+  // The actual per-day metrics are nested inside `segmented_metrics[].metrics`
+  // and `data` is empty. Flatten them so callers see one array of rows
+  // regardless of which mode Pipeboard returned.
+  if (Array.isArray(result?.segmented_metrics) && result.segmented_metrics.length > 0) {
+    return result.segmented_metrics.map((seg: any) => {
+      const m = seg?.metrics || {};
+      return {
+        ...m,
+        // Ensure the period date is reachable as date_start (matches the
+        // non-segmented response shape so downstream code is uniform).
+        date_start: m.date_start || seg.period_start || seg.period || '',
+        date_stop: m.date_stop || seg.period_end || seg.period || '',
+      } as MetaInsightRow;
+    });
+  }
+
   // Pipeboard returns either { data: [...] } or just an array depending on tool;
   // normalize:
   if (Array.isArray(result)) return result;
