@@ -20,6 +20,14 @@ import {
   StageDistribution,
   InsightsPanel,
   NotesBanner,
+  QualitySummaryCards,
+  QualityTrendSVG,
+  QualityDefinitionsPanel,
+  CPQLCPGLTable,
+  QualityChannelTable,
+  StageDistributionWithCategories,
+  QualityRollingTable,
+  QualityInsightsPanel,
 } from './components';
 
 export const dynamic = 'force-dynamic';
@@ -123,7 +131,67 @@ export default async function DashboardPage(props: {
           <>
             {data.notes?.length > 0 && <NotesBanner notes={data.notes} />}
 
-            {/* Focal-day snapshot — shows the audited day's numbers prominently */}
+            {/* ============================================================
+                QUALITY DASHBOARD — matches the canonical Lead Quality skill
+                Visible only when focal_date is set (data.quality is computed)
+            ============================================================ */}
+            {data.quality && (
+              <>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: '#666',
+                    margin: '4px 0 6px',
+                    fontWeight: 700,
+                    textTransform: 'uppercase',
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  Quality view —{' '}
+                  {dateField === 'booked_at' ? 'booked' : 'created'} on {data.focal_date}
+                </div>
+                <QualitySummaryCards quality={data.quality} />
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1.2fr 1fr',
+                    gap: 14,
+                    alignItems: 'start',
+                    marginBottom: 16,
+                  }}
+                >
+                  <QualityTrendSVG daily={data.quality.daily_quality} />
+                  <QualityDefinitionsPanel />
+                </div>
+
+                <QualityChannelTable channels={data.quality.channels} quality={data.quality} />
+                <CPQLCPGLTable quality={data.quality} />
+                <StageDistributionWithCategories stages={data.stage_distribution} />
+                <QualityRollingTable daily={data.quality.daily_quality} />
+                <QualityInsightsPanel bullets={data.quality.insight_bullets} />
+              </>
+            )}
+
+            {/* ============================================================
+                VOLUME / SPEND DETAIL — kept below Quality view
+            ============================================================ */}
+            <div
+              style={{
+                fontSize: 12,
+                color: '#666',
+                margin: '24px 0 6px',
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: 0.5,
+                borderTop: '1px solid #e6e6e6',
+                paddingTop: 24,
+              }}
+            >
+              Volume detail (window {from} to {to})
+            </div>
+
+            {/* Focal-day snapshot for spend metrics */}
             {data.focal_date && data.daily_trend?.length > 0 && (
               <FocalDayCards
                 focalDate={data.focal_date}
@@ -132,8 +200,15 @@ export default async function DashboardPage(props: {
               />
             )}
 
-            {/* Window totals — full date range aggregate */}
-            <div style={{ fontSize: 12, color: '#666', margin: '4px 0 6px', fontWeight: 600, textTransform: 'uppercase' }}>
+            <div
+              style={{
+                fontSize: 12,
+                color: '#666',
+                margin: '4px 0 6px',
+                fontWeight: 600,
+                textTransform: 'uppercase',
+              }}
+            >
               Window totals ({from} to {to})
             </div>
             <SummaryCards
@@ -155,7 +230,8 @@ export default async function DashboardPage(props: {
             {data.daily_trend?.length > 0 && (
               <DailyTrendTable daily={data.daily_trend} focalDate={data.focal_date} />
             )}
-            <StageDistribution stages={data.stage_distribution} />
+            {/* Stage distribution: only show here if Quality view didn't show it */}
+            {!data.quality && <StageDistribution stages={data.stage_distribution} />}
           </>
         )}
 

@@ -325,6 +325,59 @@ const GOOD_STAGES = new Set(['pressure sell', 'ultra-hot', 'token', 'lead won'])
 
 const PENDING_STAGES = new Set(['call booked', 'request received']);
 
+// ---- Stage categories (for the Quality dashboard's stage table) ----
+export type StageCategory =
+  | 'PENDING'
+  | 'HIGH_INTENT'
+  | 'SUPPORT_QUAL'
+  | 'SALES_QUAL'
+  | 'OUTCOME_WON'
+  | 'OUTCOME_LOST'
+  | 'DISQUALIFIED'
+  | 'CONTACT_FAILED'
+  | 'OTHER';
+
+const STAGE_CATEGORY_MAP: Record<string, StageCategory> = {
+  // PENDING — lead came in, not yet contacted
+  'call booked': 'PENDING',
+  'request received': 'PENDING',
+
+  // SUPPORT_QUAL — connected with support
+  'calls today': 'SUPPORT_QUAL',
+  'review': 'SUPPORT_QUAL',
+
+  // SALES_QUAL — moved into sales nurture
+  'school shortlisting': 'SALES_QUAL',
+  'nurturing': 'SALES_QUAL',
+  '2nd call needed': 'SALES_QUAL',
+  'attention needed': 'SALES_QUAL',
+  'focus leads': 'SALES_QUAL',
+  'back burner': 'SALES_QUAL',
+
+  // HIGH_INTENT — hot leads close to closing
+  'pressure sell': 'HIGH_INTENT',
+  'ultra-hot': 'HIGH_INTENT',
+  'token': 'HIGH_INTENT',
+
+  // OUTCOMES
+  'lead won': 'OUTCOME_WON',
+  'lead lost': 'OUTCOME_LOST',
+
+  // CONTACT_FAILED — couldn't connect
+  'no show': 'CONTACT_FAILED',
+  'dnp': 'CONTACT_FAILED',
+
+  // DISQUALIFIED — manual reject
+  'deleted': 'DISQUALIFIED',
+  'cancelled': 'DISQUALIFIED',
+  'permanent delete': 'DISQUALIFIED',
+};
+
+export function categorizeStage(stageName: string): StageCategory {
+  const key = (stageName || '').toLowerCase().trim();
+  return STAGE_CATEGORY_MAP[key] || 'OTHER';
+}
+
 export function detectQuality(
   lead: MimLead,
   stageName: string

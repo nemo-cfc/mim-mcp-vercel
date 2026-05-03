@@ -11,7 +11,14 @@
  * mim-essay-volume-report and mim-essay-quality-report skills.
  */
 import { fetchLeadsForRange } from './mim-essay-api';
-import { enrichLead, isMimEssayLead, type MimLead, type EnrichedLead } from './attribution';
+import {
+  enrichLead,
+  isMimEssayLead,
+  categorizeStage,
+  type MimLead,
+  type EnrichedLead,
+  type StageCategory,
+} from './attribution';
 import {
   getMetaSpendByAd,
   getMetaInsights,
@@ -159,10 +166,81 @@ export interface DecayContext {
 export interface CombinedDashboard extends VolumeReport {
   focal_date?: string;
   date_field?: 'created_at' | 'booked_at';
-  stage_distribution: Array<{ stage: string; count: number; pct: number }>;
+  stage_distribution: Array<{ stage: string; count: number; pct: number; category: StageCategory }>;
   daily_trend?: DailyTrendRow[];
   decay?: DecayContext;
   insights?: string;
+  /** Quality view extensions — populated when focal_date is set */
+  quality?: QualityContext;
+}
+
+export interface QualityContext {
+  focal_date: string;
+  // Focal day numbers
+  leads: number;
+  qualified: number;
+  good: number;
+  qualified_rate: number;
+  good_rate: number;
+  cpql: number;
+  cpgl: number;
+  spend_leadgen: number; // Meta C1+C2+C4 lanes (same as the skill)
+
+  // Comparison: previous day
+  prev_day: { date: string; leads: number; qualified: number; good: number; cpql: number; cpgl: number; spend_leadgen: number };
+
+  // Comparison: trailing 7d (excluding focal)
+  trailing_7d: { leads: number; qualified: number; good: number; qualified_rate: number; good_rate: number; cpql: number; cpgl: number; spend_leadgen: number };
+
+  // Deltas
+  delta_leads_vs_prev: number;
+  delta_leads_vs_7d_avg: number;
+  delta_cpql_vs_prev: number;
+  delta_cpql_vs_7d: number;
+  delta_cpgl_vs_prev: number;
+  delta_cpgl_vs_7d: number;
+  delta_qual_pp_vs_7d: number; // percentage-point delta
+  delta_good_pp_vs_7d: number;
+
+  // School Shortlisting projection (skill: leads at SS not yet graded)
+  ss_pending_count: number;
+  ss_projection: {
+    prior_good_given_qual_rate: number; // 6D rate excl focal, used as multiplier
+    projected_extra_good: number;
+    projected_total_good: number;
+    projected_good_rate: number;
+    projected_cpgl: number;
+  };
+
+  // Per-channel deltas vs trailing-7d (excluding focal)
+  channels: Array<{
+    channel: string;
+    leads: number;
+    qualified: number;
+    good: number;
+    qualified_rate: number;
+    good_rate: number;
+    leads_7d: number;
+    qual_rate_7d: number;
+    good_rate_7d: number;
+    delta_qual_pp: number;
+    delta_good_pp: number;
+  }>;
+
+  // 7d rolling table rows (date-by-date)
+  daily_quality: Array<{
+    date: string;
+    weekday: string;
+    leads: number;
+    qualified: number;
+    good: number;
+    qualified_rate: number;
+    good_rate: number;
+    is_focal: boolean;
+  }>;
+
+  // Insight bullets (emoji-led, ready to render)
+  insight_bullets: string[];
 }
 
 function dailyDate(d: string): string {
@@ -426,16 +504,25 @@ export async function buildVolumeReport(
     cpql: totalQualified > 0 ? +(totalSpend / totalQualified).toFixed(2) : 0,
   };
 
-  // Stage distribution
+  // Stage distribution (focal day if focalDate is set, otherwise window)
+  const stageScope =
+    opts?.focalDate
+      ? enriched.filter((l) => {
+          const dateVal = dateField === 'booked_at' ? l.booked_at : l.created_at;
+          return (dateVal || '').slice(0, 10) === opts.focalDate;
+        })
+      : enriched;
   const stageCounts = new Map<string, number>();
-  for (const l of enriched) {
+  for (const l of stageScope) {
     stageCounts.set(l.stage, (stageCounts.get(l.stage) || 0) + 1);
   }
+  const stageScopeTotal = stageScope.length;
   const stage_distribution = Array.from(stageCounts.entries())
     .map(([stage, count]) => ({
       stage,
       count,
-      pct: totalLeads > 0 ? +((count / totalLeads) * 100).toFixed(2) : 0,
+      pct: stageScopeTotal > 0 ? +((count / stageScopeTotal) * 100).toFixed(2) : 0,
+      category: categorizeStage(stage),
     }))
     .sort((a, b) => b.count - a.count);
 
@@ -629,6 +716,245 @@ export async function buildVolumeReport(
             );
 
           dashboard.focal_date = focalDate;
+
+          // ---- Quality context (matches the canonical Quality Report skill) ----
+          {
+            // Per-day enriched-lead lookup for focal + comparison windows
+            const dateOf = (l: EnrichedLead) =>
+              ((dateField === 'booked_at' ? l.booked_at : l.created_at) || '').slice(0, 10);
+            const allDays = daily_trend.map((d) => d.date);
+            const focalDayLeads = enriched.filter((l) => dateOf(l) === focalDate);
+            const ssPendingCount = focalDayLeads.filter(
+              (l) => (l.stage || '').toLowerCase().trim() === 'school shortlisting'
+            ).length;
+
+            // Trailing 7d window (excluding focal)
+            const trailingDates = allDays.slice(Math.max(0, focalIdx - 7), focalIdx);
+            const trailingLeads = enriched.filter((l) => trailingDates.includes(dateOf(l)));
+            const trailingDailyMeta = last7; // already excludes focal
+
+            const trailingMetaSpend = trailingDailyMeta.reduce((s, d) => s + d.spend_meta, 0);
+            const trailingGoogleSpend = trailingDailyMeta.reduce((s, d) => s + d.spend_google, 0);
+            const trailingTotal = trailingLeads.length;
+            const trailingQual = trailingLeads.filter((l) => l.is_qualified).length;
+            const trailingGood = trailingLeads.filter((l) => l.is_good).length;
+            // LeadGen spend = Meta + Google (excluding ToF/engagement); we
+            // approximate using total Meta+Google since lane data is window-level.
+            const trailingLeadgenSpend = trailingMetaSpend + trailingGoogleSpend;
+
+            // Previous day
+            const prevDate = trailingDates[trailingDates.length - 1] || '';
+            const prevDayMeta = daily_trend.find((d) => d.date === prevDate);
+            const prevDayLeads = enriched.filter((l) => dateOf(l) === prevDate);
+            const prevQual = prevDayLeads.filter((l) => l.is_qualified).length;
+            const prevGood = prevDayLeads.filter((l) => l.is_good).length;
+            const prevSpendLeadgen = (prevDayMeta?.spend_meta || 0) + (prevDayMeta?.spend_google || 0);
+            const prevCpql = prevQual > 0 ? prevSpendLeadgen / prevQual : 0;
+            const prevCpgl = prevGood > 0 ? prevSpendLeadgen / prevGood : 0;
+
+            // Focal day (using enriched leads, not daily_trend, to avoid double-counting)
+            const focalQual = focalDayLeads.filter((l) => l.is_qualified).length;
+            const focalGood = focalDayLeads.filter((l) => l.is_good).length;
+            const focalSpendLeadgen =
+              (focalRow?.spend_meta || 0) + (focalRow?.spend_google || 0);
+            const focalCpql = focalQual > 0 ? focalSpendLeadgen / focalQual : 0;
+            const focalCpgl = focalGood > 0 ? focalSpendLeadgen / focalGood : 0;
+            const focalLeads = focalDayLeads.length;
+            const focalQualRate = focalLeads > 0 ? (focalQual / focalLeads) * 100 : 0;
+            const focalGoodRateQ = focalLeads > 0 ? (focalGood / focalLeads) * 100 : 0;
+
+            // 7d avg derivatives
+            const trailingDays = trailingDates.length || 1;
+            const trailingAvgLeads = trailingTotal / trailingDays;
+            const trailingQualRate = trailingTotal > 0 ? (trailingQual / trailingTotal) * 100 : 0;
+            const trailingGoodRate = trailingTotal > 0 ? (trailingGood / trailingTotal) * 100 : 0;
+            const trailingCpql =
+              trailingQual > 0 ? trailingLeadgenSpend / trailingQual : 0;
+            const trailingCpgl =
+              trailingGood > 0 ? trailingLeadgenSpend / trailingGood : 0;
+
+            // SS Projection (from skill): use prior 6d good-given-qual rate
+            const priorGoodGivenQual = trailingQual > 0 ? trailingGood / trailingQual : 0;
+            const projectedExtraGood = ssPendingCount * priorGoodGivenQual;
+            const projectedTotalGood = focalGood + projectedExtraGood;
+            const projectedGoodRate = focalLeads > 0 ? (projectedTotalGood / focalLeads) * 100 : 0;
+            const projectedCpgl =
+              projectedTotalGood > 0 ? focalSpendLeadgen / projectedTotalGood : 0;
+
+            // Channel-level 7d comparison
+            type ChAgg = { leads: number; qual: number; good: number };
+            const focalByChannel = new Map<string, ChAgg>();
+            const trailingByChannel = new Map<string, ChAgg>();
+            const channelKey = (l: EnrichedLead) =>
+              l.channel === 'Cold Leads - Meta' && l.meta_sub_channel
+                ? `${l.channel} (${l.meta_sub_channel})`
+                : l.channel;
+            for (const l of focalDayLeads) {
+              const k = channelKey(l);
+              const a = focalByChannel.get(k) || { leads: 0, qual: 0, good: 0 };
+              a.leads++;
+              if (l.is_qualified) a.qual++;
+              if (l.is_good) a.good++;
+              focalByChannel.set(k, a);
+            }
+            for (const l of trailingLeads) {
+              const k = channelKey(l);
+              const a = trailingByChannel.get(k) || { leads: 0, qual: 0, good: 0 };
+              a.leads++;
+              if (l.is_qualified) a.qual++;
+              if (l.is_good) a.good++;
+              trailingByChannel.set(k, a);
+            }
+            const allChannelKeys = new Set<string>([
+              ...focalByChannel.keys(),
+              ...trailingByChannel.keys(),
+            ]);
+            const qualityChannels = Array.from(allChannelKeys)
+              .filter((k) => k && k !== 'MOF Remarketing' && k !== 'Others') // matches reference exclusion
+              .map((k) => {
+                const f = focalByChannel.get(k) || { leads: 0, qual: 0, good: 0 };
+                const t = trailingByChannel.get(k) || { leads: 0, qual: 0, good: 0 };
+                const fQualRate = f.leads > 0 ? (f.qual / f.leads) * 100 : 0;
+                const fGoodRate = f.leads > 0 ? (f.good / f.leads) * 100 : 0;
+                const tQualRate = t.leads > 0 ? (t.qual / t.leads) * 100 : 0;
+                const tGoodRate = t.leads > 0 ? (t.good / t.leads) * 100 : 0;
+                return {
+                  channel: k,
+                  leads: f.leads,
+                  qualified: f.qual,
+                  good: f.good,
+                  qualified_rate: +fQualRate.toFixed(2),
+                  good_rate: +fGoodRate.toFixed(2),
+                  leads_7d: t.leads,
+                  qual_rate_7d: +tQualRate.toFixed(2),
+                  good_rate_7d: +tGoodRate.toFixed(2),
+                  delta_qual_pp: +(fQualRate - tQualRate).toFixed(2),
+                  delta_good_pp: +(fGoodRate - tGoodRate).toFixed(2),
+                };
+              })
+              .sort((a, b) => b.leads - a.leads);
+
+            // 7d rolling daily quality table (date-by-date, focal highlighted)
+            const weekdayName = (dateStr: string) => {
+              const d = new Date(dateStr + 'T00:00:00Z');
+              return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+            };
+            const window7Dates = daily_trend.slice(Math.max(0, focalIdx - 6), focalIdx + 1);
+            const daily_quality = window7Dates.map((row) => {
+              const dayLeads = enriched.filter((l) => dateOf(l) === row.date);
+              const q = dayLeads.filter((l) => l.is_qualified).length;
+              const g = dayLeads.filter((l) => l.is_good).length;
+              const total = dayLeads.length;
+              return {
+                date: row.date,
+                weekday: weekdayName(row.date),
+                leads: total,
+                qualified: q,
+                good: g,
+                qualified_rate: total > 0 ? +((q / total) * 100).toFixed(1) : 0,
+                good_rate: total > 0 ? +((g / total) * 100).toFixed(1) : 0,
+                is_focal: row.date === focalDate,
+              };
+            });
+
+            // Insight bullets — emoji-led, ready to render
+            const insight_bullets: string[] = [];
+            if (focalGoodRateQ < trailingGoodRate - 5) {
+              const ssNote =
+                ssPendingCount > 0
+                  ? ` — partly due to ${ssPendingCount} School shortlisting leads awaiting grading.`
+                  : '.';
+              insight_bullets.push(
+                `⚠️ Good Rate well below 7D avg: ${focalGoodRateQ.toFixed(1)}% today vs ${trailingGoodRate.toFixed(1)}% 7D${ssNote}`
+              );
+            }
+            if (ssPendingCount > 0) {
+              insight_bullets.push(
+                `⏳ ${ssPendingCount} SS leads pending grading — projected to add ~${projectedExtraGood.toFixed(1)} good leads (applying ${(priorGoodGivenQual * 100).toFixed(1)}% prior 6D good-given-qual baseline). Projected good total: ${projectedTotalGood.toFixed(1)} (${projectedGoodRate.toFixed(1)}%).`
+              );
+            }
+            if (focalQualRate < trailingQualRate - 3) {
+              insight_bullets.push(
+                `⚠️ Qual Rate dropped: ${focalQualRate.toFixed(1)}% vs ${trailingQualRate.toFixed(1)}% 7D — fewer leads reaching support qualification.`
+              );
+            }
+            // Best channel by good rate (with leads >= 5)
+            const bestCh = qualityChannels
+              .filter((c) => c.leads >= 5 && c.good_rate > 0)
+              .sort((a, b) => b.good_rate - a.good_rate)[0];
+            if (bestCh) {
+              insight_bullets.push(
+                `🏆 Best channel: ${bestCh.channel} — ${bestCh.leads} leads, ${bestCh.qualified_rate.toFixed(0)}% qual / ${bestCh.good_rate.toFixed(0)}% good.`
+              );
+            }
+            // Weakest by qual rate (with leads >= 5)
+            const weakCh = qualityChannels
+              .filter((c) => c.leads >= 5)
+              .sort((a, b) => a.qualified_rate - b.qualified_rate)[0];
+            if (weakCh && weakCh !== bestCh) {
+              insight_bullets.push(
+                `📉 Weakest channel (qual): ${weakCh.channel} — ${weakCh.leads} leads, ${weakCh.qualified_rate.toFixed(0)}% qual / ${weakCh.good_rate.toFixed(0)}% good.`
+              );
+            }
+            // Cold Meta callout if present
+            const coldMeta = qualityChannels.find((c) => c.channel.startsWith('Cold Leads - Meta'));
+            if (coldMeta && coldMeta.leads > 0) {
+              insight_bullets.push(
+                `📊 Cold Meta: ${coldMeta.leads}L, ${coldMeta.qualified_rate.toFixed(0)}% qual, ${coldMeta.good_rate.toFixed(0)}% good — Δ Good vs 7D: ${coldMeta.delta_good_pp >= 0 ? '+' : ''}${coldMeta.delta_good_pp.toFixed(1)}pp.`
+              );
+            }
+
+            dashboard.quality = {
+              focal_date: focalDate,
+              leads: focalLeads,
+              qualified: focalQual,
+              good: focalGood,
+              qualified_rate: +focalQualRate.toFixed(2),
+              good_rate: +focalGoodRateQ.toFixed(2),
+              cpql: +focalCpql.toFixed(2),
+              cpgl: +focalCpgl.toFixed(2),
+              spend_leadgen: +focalSpendLeadgen.toFixed(2),
+              prev_day: {
+                date: prevDate,
+                leads: prevDayLeads.length,
+                qualified: prevQual,
+                good: prevGood,
+                cpql: +prevCpql.toFixed(2),
+                cpgl: +prevCpgl.toFixed(2),
+                spend_leadgen: +prevSpendLeadgen.toFixed(2),
+              },
+              trailing_7d: {
+                leads: trailingTotal,
+                qualified: trailingQual,
+                good: trailingGood,
+                qualified_rate: +trailingQualRate.toFixed(2),
+                good_rate: +trailingGoodRate.toFixed(2),
+                cpql: +trailingCpql.toFixed(2),
+                cpgl: +trailingCpgl.toFixed(2),
+                spend_leadgen: +trailingLeadgenSpend.toFixed(2),
+              },
+              delta_leads_vs_prev: focalLeads - prevDayLeads.length,
+              delta_leads_vs_7d_avg: +(focalLeads - trailingAvgLeads).toFixed(1),
+              delta_cpql_vs_prev: +(focalCpql - prevCpql).toFixed(2),
+              delta_cpql_vs_7d: +(focalCpql - trailingCpql).toFixed(2),
+              delta_cpgl_vs_prev: +(focalCpgl - prevCpgl).toFixed(2),
+              delta_cpgl_vs_7d: +(focalCpgl - trailingCpgl).toFixed(2),
+              delta_qual_pp_vs_7d: +(focalQualRate - trailingQualRate).toFixed(2),
+              delta_good_pp_vs_7d: +(focalGoodRateQ - trailingGoodRate).toFixed(2),
+              ss_pending_count: ssPendingCount,
+              ss_projection: {
+                prior_good_given_qual_rate: +priorGoodGivenQual.toFixed(4),
+                projected_extra_good: +projectedExtraGood.toFixed(2),
+                projected_total_good: +projectedTotalGood.toFixed(2),
+                projected_good_rate: +projectedGoodRate.toFixed(2),
+                projected_cpgl: +projectedCpgl.toFixed(2),
+              },
+              channels: qualityChannels,
+              daily_quality,
+              insight_bullets,
+            };
+          }
+
           dashboard.decay = {
             focal_date: focalDate,
             cpl: {

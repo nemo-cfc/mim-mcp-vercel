@@ -287,6 +287,463 @@ export function SummaryCards(props: {
   );
 }
 
+// ===========================================================================
+// QUALITY DASHBOARD COMPONENTS — match the canonical Lead Quality Report skill
+// ===========================================================================
+
+export function QualitySummaryCards(props: { quality: any }) {
+  const q = props.quality;
+  if (!q) return null;
+  const fmtDate = (s: string) => {
+    if (!s) return '—';
+    const d = new Date(s + 'T00:00:00Z');
+    return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  };
+  const sign = (n: number) => (n >= 0 ? '+' : '');
+  const badPos = (delta: number) => delta < 0;
+  const badNeg = (delta: number) => delta > 0;
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+        gap: 12,
+        marginBottom: 16,
+      }}
+    >
+      {/* Card 1: Leads Booked */}
+      <div style={styles.card}>
+        <div style={styles.k}>Leads</div>
+        <div style={styles.v}>{q.leads}</div>
+        <div style={styles.d}>
+          vs Prev ({fmtDate(q.prev_day.date)}):{' '}
+          <span style={{ ...styles.badge, ...(badPos(q.delta_leads_vs_prev) ? styles.bad : styles.good) }}>
+            {sign(q.delta_leads_vs_prev)}{q.delta_leads_vs_prev}
+          </span>
+          <br />
+          vs 7D Avg ({(q.trailing_7d.leads / 7).toFixed(0)}):{' '}
+          <span style={{ ...styles.badge, ...(badPos(q.delta_leads_vs_7d_avg) ? styles.bad : styles.good) }}>
+            {sign(q.delta_leads_vs_7d_avg)}{q.delta_leads_vs_7d_avg}
+          </span>
+        </div>
+      </div>
+      {/* Card 2: Qualified */}
+      <div style={styles.card}>
+        <div style={styles.k}>Qualified ({q.qualified_rate.toFixed(1)}%)</div>
+        <div style={styles.v}>{q.qualified}</div>
+        <div style={styles.d}>
+          CPQL ₹{fmt(q.cpql)}
+          <br />
+          vs 7D CPQL:{' '}
+          <span style={{ ...styles.badge, ...(badNeg(q.delta_cpql_vs_7d) ? styles.bad : styles.good) }}>
+            ₹{sign(q.delta_cpql_vs_7d)}{fmt(q.delta_cpql_vs_7d)}
+          </span>
+        </div>
+      </div>
+      {/* Card 3: Good */}
+      <div style={styles.card}>
+        <div style={styles.k}>Good ({q.good_rate.toFixed(1)}%)</div>
+        <div style={styles.v}>{q.good}</div>
+        <div style={styles.d}>
+          CPGL ₹{fmt(q.cpgl)}
+          {q.ss_pending_count > 0 && (
+            <>
+              <br />
+              {q.ss_pending_count} SS leads pending grading
+            </>
+          )}
+        </div>
+      </div>
+      {/* Card 4: Projected Good (only if SS pending) */}
+      {q.ss_pending_count > 0 && (
+        <div style={{ ...styles.card, background: '#fefce8', borderColor: '#fde68a' }}>
+          <div style={styles.k}>Proj. Good (w/ SS)</div>
+          <div style={styles.v}>{q.ss_projection.projected_total_good.toFixed(1)}</div>
+          <div style={styles.d}>
+            Proj. CPGL ₹{fmt(q.ss_projection.projected_cpgl)}
+            <br />
+            Proj. Good Rate {q.ss_projection.projected_good_rate.toFixed(1)}%
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function QualityTrendSVG(props: { daily: any[] }) {
+  const data = props.daily;
+  if (!data?.length) return null;
+  const W = 500;
+  const H = 180;
+  const padL = 30;
+  const padR = 30;
+  const padT = 20;
+  const padB = 30;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+  const maxRate = Math.max(
+    ...data.map((d) => Math.max(d.qualified_rate, d.good_rate)),
+    1
+  );
+  const x = (i: number) =>
+    padL + (data.length === 1 ? innerW / 2 : (i * innerW) / (data.length - 1));
+  const y = (rate: number) => padT + innerH - (rate / maxRate) * innerH;
+  const goodPath = data.map((d, i) => `${i === 0 ? 'M' : 'L'}${x(i)},${y(d.good_rate)}`).join(' ');
+  const qualPath = data.map((d, i) => `${i === 0 ? 'M' : 'L'}${x(i)},${y(d.qualified_rate)}`).join(' ');
+  return (
+    <div style={{ ...styles.card, padding: 14 }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>
+        7-Day Quality Trend
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block', maxHeight: 220 }}>
+        <path d={qualPath} stroke="#9ca3af" strokeWidth={2} strokeDasharray="6 3" fill="none" />
+        <path d={goodPath} stroke="#16794c" strokeWidth={2.5} fill="none" />
+        {data.map((d, i) => (
+          <g key={d.date}>
+            <circle cx={x(i)} cy={y(d.good_rate)} r={d.is_focal ? 5 : 3.5} fill="#16794c" />
+            <text
+              x={x(i)}
+              y={y(d.good_rate) - 8}
+              fontSize={10}
+              textAnchor="middle"
+              fill="#16794c"
+            >
+              {Math.round(d.good_rate)}%
+            </text>
+            <text x={x(i)} y={H - 5} fontSize={9} textAnchor="middle" fill="#888">
+              {d.date.slice(5)} {d.weekday}
+            </text>
+          </g>
+        ))}
+        <text x={W - 70} y={15} fontSize={10} fill="#16794c">
+          — Good%
+        </text>
+        <text x={W - 70} y={28} fontSize={10} fill="#9ca3af">
+          --- Qual%
+        </text>
+      </svg>
+    </div>
+  );
+}
+
+export function QualityDefinitionsPanel() {
+  return (
+    <div style={{ ...styles.card }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Quality Definitions</div>
+      <div style={{ fontSize: 12, color: '#444', lineHeight: 1.6 }}>
+        <strong>Qualified</strong> = Reached "Calls today" (connected with support)
+        <br />
+        <strong>Good</strong> = Pressure Sell / Ultra-hot / Token / Lead won
+        <br />
+        <br />
+        <strong>SS Projection</strong> = good_today + SS_count × (prior 6D good-given-qual rate)
+        <br />
+        <strong>CPQL/CPGL</strong> = LeadGen spend ÷ Qual/Good leads of the booking date
+      </div>
+    </div>
+  );
+}
+
+export function CPQLCPGLTable(props: { quality: any }) {
+  const q = props.quality;
+  if (!q) return null;
+  const fmtDate = (s: string) => {
+    if (!s) return '—';
+    const d = new Date(s + 'T00:00:00Z');
+    return d.toLocaleDateString('en-GB', {
+      day: 'numeric',
+      month: 'short',
+      weekday: 'short',
+      timeZone: 'UTC',
+    });
+  };
+  const rows = [
+    {
+      label: 'CPQL',
+      focal: q.cpql,
+      prev: q.prev_day.cpql,
+      d7: q.trailing_7d.cpql,
+      dPrev: q.delta_cpql_vs_prev,
+      d7Delta: q.delta_cpql_vs_7d,
+    },
+    {
+      label: 'CPGL (current)',
+      focal: q.cpgl,
+      prev: q.prev_day.cpgl,
+      d7: q.trailing_7d.cpgl,
+      dPrev: q.delta_cpgl_vs_prev,
+      d7Delta: q.delta_cpgl_vs_7d,
+    },
+  ];
+  return (
+    <Section title={`CPQL / CPGL (LeadGen Spend: ₹${fmt(q.spend_leadgen)} | 7D LeadGen: ₹${fmt(q.trailing_7d.spend_leadgen)})`}>
+      <ScrollX>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Metric</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>{fmtDate(q.focal_date)}</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>{fmtDate(q.prev_day.date)}</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>7D Avg</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Δ vs Prev</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Δ vs 7D</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.label}>
+                <td style={styles.td}>{r.label}</td>
+                <td style={styles.tdNum}>{r.focal > 0 ? '₹' + fmt(r.focal) : '—'}</td>
+                <td style={styles.tdNum}>{r.prev > 0 ? '₹' + fmt(r.prev) : '—'}</td>
+                <td style={styles.tdNum}>{r.d7 > 0 ? '₹' + fmt(r.d7) : '—'}</td>
+                <td style={styles.tdNum}>
+                  <span
+                    style={{
+                      ...styles.badge,
+                      ...(r.dPrev > 0 ? styles.bad : styles.good),
+                    }}
+                  >
+                    ₹{r.dPrev >= 0 ? '+' : ''}
+                    {fmt(r.dPrev)}
+                  </span>
+                </td>
+                <td style={styles.tdNum}>
+                  <span
+                    style={{
+                      ...styles.badge,
+                      ...(r.d7Delta > 0 ? styles.bad : styles.good),
+                    }}
+                  >
+                    ₹{r.d7Delta >= 0 ? '+' : ''}
+                    {fmt(r.d7Delta)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+            {q.ss_pending_count > 0 && (
+              <tr style={{ background: '#fefce8', fontStyle: 'italic' }}>
+                <td style={styles.td}>CPGL (Projected w/ SS)</td>
+                <td style={styles.tdNum}>₹{fmt(q.ss_projection.projected_cpgl)}</td>
+                <td style={styles.tdNum}>—</td>
+                <td style={styles.tdNum}>—</td>
+                <td style={styles.tdNum}>—</td>
+                <td style={styles.tdNum}>—</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </ScrollX>
+    </Section>
+  );
+}
+
+export function QualityChannelTable(props: { channels: any[]; quality: any }) {
+  if (!props.channels?.length) return null;
+  const q = props.quality;
+  const totalLeads = props.channels.reduce((s, c) => s + c.leads, 0);
+  const totalQual = props.channels.reduce((s, c) => s + c.qualified, 0);
+  const totalGood = props.channels.reduce((s, c) => s + c.good, 0);
+  const total7d = props.channels.reduce((s, c) => s + c.leads_7d, 0);
+  const totalQualRate = totalLeads > 0 ? (totalQual / totalLeads) * 100 : 0;
+  const totalGoodRate = totalLeads > 0 ? (totalGood / totalLeads) * 100 : 0;
+  const total7dQualRate =
+    q?.trailing_7d?.qualified_rate ?? 0;
+  const total7dGoodRate =
+    q?.trailing_7d?.good_rate ?? 0;
+  const sign = (n: number) => (n >= 0 ? '+' : '');
+  return (
+    <Section title="Channel Quality">
+      <ScrollX>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Channel</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Leads</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Qual</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Good</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Qual %</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Good %</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>7D Leads</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Δ Qual% vs 7D</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Δ Good% vs 7D</th>
+            </tr>
+          </thead>
+          <tbody>
+            {props.channels.map((c) => (
+              <tr key={c.channel}>
+                <td style={{ ...styles.td, fontWeight: 700 }}>{c.channel}</td>
+                <td style={styles.tdNum}>{c.leads}</td>
+                <td style={styles.tdNum}>{c.qualified}</td>
+                <td style={styles.tdNum}>{c.good}</td>
+                <td style={styles.tdNum}>{c.qualified_rate.toFixed(1)}%</td>
+                <td style={styles.tdNum}>{c.good_rate.toFixed(1)}%</td>
+                <td style={styles.tdNum}>{c.leads_7d}</td>
+                <td style={styles.tdNum}>
+                  <span style={{ ...styles.badge, ...(c.delta_qual_pp >= 0 ? styles.good : styles.bad) }}>
+                    {sign(c.delta_qual_pp)}{c.delta_qual_pp.toFixed(1)}pp
+                  </span>
+                </td>
+                <td style={styles.tdNum}>
+                  <span style={{ ...styles.badge, ...(c.delta_good_pp >= 0 ? styles.good : styles.bad) }}>
+                    {sign(c.delta_good_pp)}{c.delta_good_pp.toFixed(1)}pp
+                  </span>
+                </td>
+              </tr>
+            ))}
+            <tr style={{ background: '#f0f4ff', fontWeight: 700 }}>
+              <td style={styles.td}>TOTAL</td>
+              <td style={styles.tdNum}>{totalLeads}</td>
+              <td style={styles.tdNum}>{totalQual}</td>
+              <td style={styles.tdNum}>{totalGood}</td>
+              <td style={styles.tdNum}>{totalQualRate.toFixed(1)}%</td>
+              <td style={styles.tdNum}>{totalGoodRate.toFixed(1)}%</td>
+              <td style={styles.tdNum}>{total7d}</td>
+              <td style={styles.tdNum}>
+                <span style={{ ...styles.badge, ...(totalQualRate >= total7dQualRate ? styles.good : styles.bad) }}>
+                  {sign(totalQualRate - total7dQualRate)}{(totalQualRate - total7dQualRate).toFixed(1)}pp
+                </span>
+              </td>
+              <td style={styles.tdNum}>
+                <span style={{ ...styles.badge, ...(totalGoodRate >= total7dGoodRate ? styles.good : styles.bad) }}>
+                  {sign(totalGoodRate - total7dGoodRate)}{(totalGoodRate - total7dGoodRate).toFixed(1)}pp
+                </span>
+              </td>
+            </tr>
+            {q?.ss_pending_count > 0 && (
+              <tr style={{ background: '#fefce8', fontStyle: 'italic' }}>
+                <td style={styles.td}>TOTAL (Projected)</td>
+                <td style={styles.tdNum}>{totalLeads}</td>
+                <td style={styles.tdNum}>{totalQual}</td>
+                <td style={styles.tdNum}>{q.ss_projection.projected_total_good.toFixed(1)}</td>
+                <td style={styles.tdNum}>{totalQualRate.toFixed(1)}%</td>
+                <td style={styles.tdNum}>{q.ss_projection.projected_good_rate.toFixed(1)}%</td>
+                <td style={styles.tdNum}>—</td>
+                <td style={styles.tdNum}>—</td>
+                <td style={styles.tdNum}>—</td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </ScrollX>
+    </Section>
+  );
+}
+
+export function StageDistributionWithCategories(props: { stages: any[] }) {
+  if (!props.stages?.length) return null;
+  const totalLeads = props.stages.reduce((s, st) => s + st.count, 0);
+  const totalShown = totalLeads;
+  const rowBg = (cat: string) => {
+    if (cat === 'HIGH_INTENT' || cat === 'OUTCOME_WON') return '#f0fdf4';
+    if (cat === 'DISQUALIFIED' || cat === 'CONTACT_FAILED' || cat === 'OUTCOME_LOST')
+      return '#fef3c7';
+    return undefined;
+  };
+  return (
+    <Section title="Stage Distribution">
+      <ScrollX>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Stage</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Count</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>% of Total</th>
+              <th style={styles.th}>Category</th>
+            </tr>
+          </thead>
+          <tbody>
+            {props.stages.map((s) => (
+              <tr key={s.stage} style={{ background: rowBg(s.category) }}>
+                <td style={styles.td}>{s.stage}</td>
+                <td style={styles.tdNum}>{s.count}</td>
+                <td style={styles.tdNum}>{s.pct.toFixed(1)}%</td>
+                <td style={styles.td}>{s.category}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </ScrollX>
+      <div style={{ fontSize: 11, color: '#888', marginTop: 8 }}>
+        Distribution is across {totalShown} leads on the focal day (booking-date scoped).
+      </div>
+    </Section>
+  );
+}
+
+export function QualityRollingTable(props: { daily: any[] }) {
+  if (!props.daily?.length) return null;
+  const totalLeads = props.daily.reduce((s, d) => s + d.leads, 0);
+  const totalQual = props.daily.reduce((s, d) => s + d.qualified, 0);
+  const totalGood = props.daily.reduce((s, d) => s + d.good, 0);
+  const totalQualRate = totalLeads > 0 ? (totalQual / totalLeads) * 100 : 0;
+  const totalGoodRate = totalLeads > 0 ? (totalGood / totalLeads) * 100 : 0;
+  return (
+    <Section title="Rolling 7-Day Quality Trend">
+      <ScrollX>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Date</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Leads</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Qual</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Good</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Qual %</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Good %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {props.daily.map((d) => {
+              const date = new Date(d.date + 'T00:00:00Z');
+              const label = `${date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })} ${d.weekday}`;
+              return (
+                <tr
+                  key={d.date}
+                  style={d.is_focal ? { background: '#f0fdf4', fontWeight: 600 } : undefined}
+                >
+                  <td style={styles.td}>
+                    <strong>{label}</strong>
+                    {d.is_focal && (
+                      <span style={{ marginLeft: 6, fontSize: 10, color: '#dc2626', fontWeight: 700 }}>◆</span>
+                    )}
+                  </td>
+                  <td style={styles.tdNum}>{d.leads}</td>
+                  <td style={styles.tdNum}>{d.qualified}</td>
+                  <td style={styles.tdNum}>{d.good}</td>
+                  <td style={styles.tdNum}>{d.qualified_rate.toFixed(1)}%</td>
+                  <td style={styles.tdNum}>{d.good_rate.toFixed(1)}%</td>
+                </tr>
+              );
+            })}
+            <tr style={{ background: '#f0f4ff', fontWeight: 700 }}>
+              <td style={styles.td}>7D TOTAL</td>
+              <td style={styles.tdNum}>{totalLeads}</td>
+              <td style={styles.tdNum}>{totalQual}</td>
+              <td style={styles.tdNum}>{totalGood}</td>
+              <td style={styles.tdNum}>{totalQualRate.toFixed(1)}%</td>
+              <td style={styles.tdNum}>{totalGoodRate.toFixed(1)}%</td>
+            </tr>
+          </tbody>
+        </table>
+      </ScrollX>
+    </Section>
+  );
+}
+
+export function QualityInsightsPanel(props: { bullets?: string[] }) {
+  if (!props.bullets?.length) return null;
+  return (
+    <Section title="Key Insights">
+      <div style={{ ...styles.card, padding: 12, background: '#fafafa' }}>
+        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7 }}>
+          {props.bullets.map((b, i) => (
+            <li key={i}>{b}</li>
+          ))}
+        </ul>
+      </div>
+    </Section>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Focal Day Cards — snapshot of the specific day being audited
 // ---------------------------------------------------------------------------
