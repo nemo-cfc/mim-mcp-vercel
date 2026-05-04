@@ -288,6 +288,499 @@ export function SummaryCards(props: {
 }
 
 // ===========================================================================
+// VOLUME DASHBOARD COMPONENTS — match the canonical Lead Volume Report skill
+// ===========================================================================
+
+export function VolumeHeader(props: { volume: any }) {
+  if (!props.volume) return null;
+  const v = props.volume;
+  const date = new Date(v.focal_date + 'T00:00:00Z');
+  const dateLabel = date.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <h1 style={{ fontSize: 22, margin: '0 0 4px', fontWeight: 700 }}>
+        Lead Volume Report — MiM Essay
+      </h1>
+      <p style={{ color: '#555', fontSize: 13, margin: 0 }}>
+        Report Date: <strong>{dateLabel}</strong> ({v.weekday}) | 7D Window:{' '}
+        {v.date_range_label} | Excludes Referrals & Lead-Lost-Returns
+      </p>
+    </div>
+  );
+}
+
+export function VolumeSummaryCards(props: { volume: any }) {
+  const v = props.volume;
+  if (!v) return null;
+  const sign = (n: number) => (n >= 0 ? '▲' : '▼');
+  const absNum = (n: number) => Math.abs(n);
+  return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))',
+        gap: 12,
+        marginBottom: 16,
+      }}
+    >
+      {/* Total Leads */}
+      <div style={styles.card}>
+        <div style={styles.k}>Total Leads</div>
+        <div style={styles.v}>{v.total_leads}</div>
+        <div style={styles.d}>
+          <span
+            style={{
+              ...styles.badge,
+              ...(v.delta_leads_vs_7d_avg >= 0 ? styles.good : styles.bad),
+            }}
+          >
+            {sign(v.delta_leads_vs_7d_avg)} {absNum(v.delta_leads_vs_7d_avg)} vs 7D avg{' '}
+            {v.trailing_7d.avg_leads.toFixed(0)}
+          </span>
+          <br />
+          <span
+            style={{
+              ...styles.badge,
+              ...(v.delta_leads_vs_prev >= 0 ? styles.good : styles.bad),
+              marginTop: 4,
+            }}
+          >
+            {sign(v.delta_leads_vs_prev)} {absNum(v.delta_leads_vs_prev)} vs prev {v.prev_day.leads}
+          </span>
+        </div>
+      </div>
+      {/* Total Spend */}
+      <div style={styles.card}>
+        <div style={styles.k}>Total Spend</div>
+        <div style={styles.v}>₹{fmt(v.total_spend)}</div>
+        <div style={styles.d}>7D total: ₹{fmt(v.trailing_7d.total_spend)}</div>
+      </div>
+      {/* Overall CPL */}
+      <div style={styles.card}>
+        <div style={styles.k}>Overall CPL</div>
+        <div style={styles.v}>{v.total_leads > 0 ? '₹' + fmt(v.overall_cpl) : '—'}</div>
+        <div style={styles.d}>
+          <span
+            style={{
+              ...styles.badge,
+              ...(v.delta_cpl_vs_7d_avg <= 0 ? styles.good : styles.bad),
+            }}
+          >
+            {sign(v.delta_cpl_vs_7d_avg)} ₹{absNum(Math.round(v.delta_cpl_vs_7d_avg))} vs 7D avg ₹
+            {fmt(v.trailing_7d.avg_cpl)}
+          </span>
+          <br />
+          <span
+            style={{
+              ...styles.badge,
+              ...(v.delta_cpl_vs_prev <= 0 ? styles.good : styles.bad),
+              marginTop: 4,
+            }}
+          >
+            {sign(v.delta_cpl_vs_prev)} ₹{absNum(Math.round(v.delta_cpl_vs_prev))} vs prev ₹
+            {fmt(v.prev_day.cpl)}
+          </span>
+        </div>
+      </div>
+      {/* MOF Remarketing */}
+      <div style={{ ...styles.card, background: '#fffbeb', borderColor: '#fde68a' }}>
+        <div style={styles.k}>MOF Remarketing (Meta)</div>
+        <div style={{ ...styles.v, color: '#92400e' }}>{v.mof_remarketing.leads} leads</div>
+        <div style={styles.d}>
+          Spend: ₹{fmt(v.mof_remarketing.spend)} | CPL:{' '}
+          {v.mof_remarketing.leads > 0 ? '₹' + fmt(v.mof_remarketing.cpl) : '—'}
+          <br />
+          7D avg: {v.mof_remarketing.avg_leads_7d} leads @ ₹{fmt(v.mof_remarketing.avg_cpl_7d)}
+        </div>
+      </div>
+      {/* TOF Attributed */}
+      <div style={{ ...styles.card, background: '#fffbeb', borderColor: '#fde68a' }}>
+        <div style={styles.k}>TOF Attributed</div>
+        <div style={{ ...styles.v, color: '#92400e' }}>{v.tof.attributed.toFixed(1)} leads</div>
+        <div style={styles.d}>
+          TOF Spend: ₹{fmt(v.tof.spend)} | CPL: {v.tof.attributed > 0 ? '₹' + fmt(v.tof.cpl) : '—'}
+          <br />
+          7D avg: {v.tof.avg_attributed_7d} leads @ ₹{fmt(v.tof.avg_cpl_7d)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function VolumeTrendSVG(props: { rolling: any[] }) {
+  const data = props.rolling;
+  if (!data?.length) return null;
+  const W = 760;
+  const H = 180;
+  const padL = 50;
+  const padR = 30;
+  const padT = 20;
+  const padB = 35;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+  const max = Math.max(...data.map((d) => d.total), 1);
+  const x = (i: number) =>
+    padL + (data.length === 1 ? innerW / 2 : (i * innerW) / (data.length - 1));
+  const y = (v: number) => padT + innerH - (v / max) * innerH;
+  const path = data.map((d, i) => `${i === 0 ? 'M' : 'L'}${x(i)},${y(d.total)}`).join(' ');
+  return (
+    <div style={{ ...styles.card, padding: 14 }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>7-Day Lead Trend (Fresh)</div>
+      <svg viewBox={`0 0 ${W} ${H}`} width="100%" style={{ display: 'block' }}>
+        <line x1={padL} y1={padT + innerH} x2={padL + innerW} y2={padT + innerH} stroke="#ddd" />
+        <path d={path} stroke="#2563eb" strokeWidth={2} fill="none" />
+        {data.map((d, i) => (
+          <g key={d.date}>
+            <circle cx={x(i)} cy={y(d.total)} r={d.is_focal ? 5 : 4} fill="#2563eb" />
+            <text x={x(i)} y={y(d.total) - 8} fontSize={11} textAnchor="middle" fill="#111" fontWeight={700}>
+              {d.total}
+            </text>
+            <text x={x(i)} y={H - 5} fontSize={10} textAnchor="middle" fill="#666">
+              {d.weekday} {d.date.slice(8, 10)} {monthShort(d.date)}
+            </text>
+          </g>
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+function monthShort(dateStr: string): string {
+  const m = parseInt(dateStr.slice(5, 7), 10) - 1;
+  return ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m] || '';
+}
+
+export function VolumeMethodologyPanel() {
+  return (
+    <div style={{ ...styles.card }}>
+      <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 10 }}>Methodology</div>
+      <div style={{ fontSize: 12, color: '#444', lineHeight: 1.5 }}>
+        <strong>Excluded from totals:</strong>
+        <br />
+        • analytics_source = 'referral' (operations referrals)
+        <br />
+        • source/initial_source contains "lead lost return" (sales reactivations)
+        <br />
+        <br />
+        <strong>Total Leads:</strong> CRM fresh leads only.
+        <br />
+        <strong>Remart Leads:</strong> CRM channel = MOF Remarketing.
+        <br />
+        <br />
+        <strong>TOF Attribution Weights:</strong>
+        <br />
+        • ManyChat / IG / YT / FB Organic: <strong>100%</strong>
+        <br />
+        • Google Ads: <strong>80%</strong> | SEO / Direct: <strong>75%</strong>
+        <br />
+        <br />
+        <strong>Spend:</strong>
+        <br />
+        • Cold = C7 + C8 (utm_medium=cold/sandbox)
+        <br />
+        • MOF Remart = Remarketing campaign (C2)
+        <br />
+        • TOF = C3 + C5
+        <br />
+        • Overall CPL = (Cold+Remart+Google) ÷ Fresh Leads
+      </div>
+    </div>
+  );
+}
+
+export function VolumeChannelTable(props: { volume: any }) {
+  const v = props.volume;
+  if (!v?.channel_breakdown?.length) return null;
+  const sign = (n: number) => (n >= 0 ? '▲' : '▼');
+  return (
+    <Section title={`Channel-wise Breakdown — ${v.focal_date} vs Prev / 7D Avg`}>
+      <ScrollX>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Channel</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Leads</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Spend</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>CPL</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Prev Leads</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>7D Avg Leads</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>7D Avg CPL</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Δ Leads vs 7D</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Δ CPL vs 7D</th>
+            </tr>
+          </thead>
+          <tbody>
+            {v.channel_breakdown.map((c: any) => {
+              const bg = c.is_summary_row ? '#fffbeb' : undefined;
+              return (
+                <tr key={c.channel} style={bg ? { background: bg } : undefined}>
+                  <td style={{ ...styles.td, fontWeight: 700 }}>{c.channel}</td>
+                  <td style={styles.tdNum}>{c.leads}</td>
+                  <td style={styles.tdNum}>
+                    {c.spend !== null ? '₹' + fmt(c.spend) : '—'}
+                  </td>
+                  <td style={styles.tdNum}>{c.cpl !== null ? '₹' + fmt(c.cpl) : '—'}</td>
+                  <td style={styles.tdNum}>{c.prev_leads}</td>
+                  <td style={styles.tdNum}>{c.avg_leads_7d}</td>
+                  <td style={styles.tdNum}>
+                    {c.avg_cpl_7d !== null ? '₹' + fmt(c.avg_cpl_7d) : '—'}
+                  </td>
+                  <td style={styles.tdNum}>
+                    <span
+                      style={{
+                        ...styles.badge,
+                        ...(c.delta_leads_vs_7d >= 0 ? styles.good : styles.bad),
+                      }}
+                    >
+                      {sign(c.delta_leads_vs_7d)} {Math.abs(Math.round(c.delta_leads_vs_7d))}
+                    </span>
+                  </td>
+                  <td style={styles.tdNum}>
+                    {c.delta_cpl_vs_7d !== null ? (
+                      <span
+                        style={{
+                          ...styles.badge,
+                          ...(c.delta_cpl_vs_7d <= 0 ? styles.good : styles.bad),
+                        }}
+                      >
+                        {sign(c.delta_cpl_vs_7d)} ₹{Math.abs(Math.round(c.delta_cpl_vs_7d))}
+                      </span>
+                    ) : (
+                      '—'
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
+            <tr style={{ background: '#f0f4ff', fontWeight: 700 }}>
+              <td style={styles.td}>TOTAL (CRM, fresh leads)</td>
+              <td style={styles.tdNum}>{v.total_leads}</td>
+              <td style={styles.tdNum}>₹{fmt(v.total_spend)}</td>
+              <td style={styles.tdNum}>
+                {v.total_leads > 0 ? '₹' + fmt(v.overall_cpl) : '—'}
+              </td>
+              <td style={styles.tdNum}>{v.prev_day.leads}</td>
+              <td style={styles.tdNum}>{v.trailing_7d.avg_leads}</td>
+              <td style={styles.tdNum}>₹{fmt(v.trailing_7d.avg_cpl)}</td>
+              <td style={styles.tdNum}>—</td>
+              <td style={styles.tdNum}>—</td>
+            </tr>
+          </tbody>
+        </table>
+      </ScrollX>
+    </Section>
+  );
+}
+
+export function MofRemartDailyTable(props: { mof: any }) {
+  const m = props.mof;
+  if (!m?.daily?.length) return null;
+  return (
+    <Section title="MOF Remarketing — Daily">
+      <ScrollX>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Day</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Leads</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Spend</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>CPL</th>
+            </tr>
+          </thead>
+          <tbody>
+            {m.daily.map((d: any) => (
+              <tr
+                key={d.date}
+                style={d.is_focal ? { background: '#fffbeb', fontWeight: 600 } : undefined}
+              >
+                <td style={styles.td}>
+                  <strong>
+                    {d.weekday} {d.date.slice(8, 10)} {monthShort(d.date)}
+                  </strong>
+                </td>
+                <td style={styles.tdNum}>{d.leads}</td>
+                <td style={styles.tdNum}>₹{fmt(d.spend)}</td>
+                <td style={styles.tdNum}>{d.leads > 0 ? '₹' + fmt(d.cpl) : '—'}</td>
+              </tr>
+            ))}
+            <tr style={{ background: '#f0f4ff', fontWeight: 700 }}>
+              <td style={styles.td}>7D Total / Avg</td>
+              <td style={styles.tdNum}>
+                {m.trailing_7d.leads + m.leads}
+              </td>
+              <td style={styles.tdNum}>₹{fmt(m.trailing_7d.spend + m.spend)}</td>
+              <td style={styles.tdNum}>
+                {m.trailing_7d.leads + m.leads > 0
+                  ? '₹' +
+                    fmt((m.trailing_7d.spend + m.spend) / (m.trailing_7d.leads + m.leads))
+                  : '—'}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </ScrollX>
+    </Section>
+  );
+}
+
+export function TOFAttributionTable(props: { tof: any }) {
+  const t = props.tof;
+  if (!t?.sub_channels?.length) return null;
+  const sign = (n: number) => (n >= 0 ? '▲' : '▼');
+  return (
+    <Section title="TOF Attribution Summary">
+      <ScrollX>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Sub-Channel</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Weight</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Leads</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Attributed</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Δ vs Prev</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>7D Avg</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Δ vs 7D</th>
+            </tr>
+          </thead>
+          <tbody>
+            {t.sub_channels.map((s: any) => (
+              <tr key={s.sub_channel}>
+                <td style={{ ...styles.td, fontWeight: 700 }}>{s.sub_channel}</td>
+                <td style={styles.tdNum}>{(s.weight * 100).toFixed(0)}%</td>
+                <td style={styles.tdNum}>{s.leads}</td>
+                <td style={styles.tdNum}>{s.attributed.toFixed(1)}</td>
+                <td style={styles.tdNum}>
+                  <span
+                    style={{
+                      ...styles.badge,
+                      ...(s.delta_vs_prev >= 0 ? styles.good : styles.bad),
+                    }}
+                  >
+                    {sign(s.delta_vs_prev)} {Math.abs(s.delta_vs_prev).toFixed(1)}
+                  </span>
+                </td>
+                <td style={styles.tdNum}>{s.avg_7d.toFixed(1)}</td>
+                <td style={styles.tdNum}>
+                  <span
+                    style={{
+                      ...styles.badge,
+                      ...(s.delta_vs_7d >= 0 ? styles.good : styles.bad),
+                    }}
+                  >
+                    {sign(s.delta_vs_7d)} {Math.abs(s.delta_vs_7d).toFixed(1)}
+                  </span>
+                </td>
+              </tr>
+            ))}
+            <tr style={{ background: '#f5f5f5', fontWeight: 700 }}>
+              <td style={styles.td}>TOTAL TOF Attributed</td>
+              <td style={styles.tdNum}>—</td>
+              <td style={styles.tdNum}>{t.leads}</td>
+              <td style={styles.tdNum}>{t.attributed.toFixed(1)}</td>
+              <td style={styles.tdNum}>—</td>
+              <td style={styles.tdNum}>{t.avg_attributed_7d.toFixed(1)}</td>
+              <td style={styles.tdNum}>—</td>
+            </tr>
+          </tbody>
+        </table>
+      </ScrollX>
+    </Section>
+  );
+}
+
+export function RollingChannelTrendTable(props: { rolling: any[] }) {
+  if (!props.rolling?.length) return null;
+  const totals = props.rolling.reduce(
+    (acc, d) => ({
+      cold_meta: acc.cold_meta + d.cold_meta,
+      remart_meta: acc.remart_meta + d.remart_meta,
+      manychat: acc.manychat + d.manychat,
+      google_ads: acc.google_ads + d.google_ads,
+      youtube: acc.youtube + d.youtube,
+      instagram: acc.instagram + d.instagram,
+      seo_direct: acc.seo_direct + d.seo_direct,
+      others: acc.others + d.others,
+      total: acc.total + d.total,
+    }),
+    {
+      cold_meta: 0,
+      remart_meta: 0,
+      manychat: 0,
+      google_ads: 0,
+      youtube: 0,
+      instagram: 0,
+      seo_direct: 0,
+      others: 0,
+      total: 0,
+    }
+  );
+  return (
+    <Section title="Rolling 7-Day Trend — Fresh Leads by Channel">
+      <ScrollX>
+        <table style={tableStyle}>
+          <thead>
+            <tr>
+              <th style={styles.th}>Date</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Cold Meta</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Remart (Meta)</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>ManyChat</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Google</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>YouTube</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Instagram</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>SEO/Direct</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Others</th>
+              <th style={{ ...styles.th, textAlign: 'right' }}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {props.rolling.map((d: any) => (
+              <tr
+                key={d.date}
+                style={d.is_focal ? { background: '#fffbeb', fontWeight: 700 } : undefined}
+              >
+                <td style={styles.td}>
+                  <strong>
+                    {d.weekday} {d.date.slice(8, 10)} {monthShort(d.date)}
+                  </strong>
+                </td>
+                <td style={styles.tdNum}>{d.cold_meta}</td>
+                <td style={styles.tdNum}>{d.remart_meta}</td>
+                <td style={styles.tdNum}>{d.manychat}</td>
+                <td style={styles.tdNum}>{d.google_ads}</td>
+                <td style={styles.tdNum}>{d.youtube}</td>
+                <td style={styles.tdNum}>{d.instagram}</td>
+                <td style={styles.tdNum}>{d.seo_direct}</td>
+                <td style={styles.tdNum}>{d.others}</td>
+                <td style={styles.tdNum}>
+                  <strong>{d.total}</strong>
+                </td>
+              </tr>
+            ))}
+            <tr style={{ background: '#f0f4ff', fontWeight: 700 }}>
+              <td style={styles.td}>7D Total</td>
+              <td style={styles.tdNum}>{totals.cold_meta}</td>
+              <td style={styles.tdNum}>{totals.remart_meta}</td>
+              <td style={styles.tdNum}>{totals.manychat}</td>
+              <td style={styles.tdNum}>{totals.google_ads}</td>
+              <td style={styles.tdNum}>{totals.youtube}</td>
+              <td style={styles.tdNum}>{totals.instagram}</td>
+              <td style={styles.tdNum}>{totals.seo_direct}</td>
+              <td style={styles.tdNum}>{totals.others}</td>
+              <td style={styles.tdNum}>{totals.total}</td>
+            </tr>
+          </tbody>
+        </table>
+      </ScrollX>
+    </Section>
+  );
+}
+
+// ===========================================================================
 // QUALITY DASHBOARD COMPONENTS — match the canonical Lead Quality Report skill
 // ===========================================================================
 

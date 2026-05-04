@@ -20,6 +20,14 @@ import {
   StageDistribution,
   InsightsPanel,
   NotesBanner,
+  VolumeHeader,
+  VolumeSummaryCards,
+  VolumeTrendSVG,
+  VolumeMethodologyPanel,
+  VolumeChannelTable,
+  MofRemartDailyTable,
+  TOFAttributionTable,
+  RollingChannelTrendTable,
   QualitySummaryCards,
   QualityTrendSVG,
   QualityDefinitionsPanel,
@@ -130,6 +138,32 @@ export default async function DashboardPage(props: {
         {data && (
           <>
             {data.notes?.length > 0 && <NotesBanner notes={data.notes} />}
+
+            {/* ============================================================
+                VOLUME DASHBOARD — matches the canonical Lead Volume skill
+            ============================================================ */}
+            {data.volume && (
+              <>
+                <VolumeHeader volume={data.volume} />
+                <VolumeSummaryCards volume={data.volume} />
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: '1.2fr 1fr',
+                    gap: 14,
+                    alignItems: 'start',
+                    marginBottom: 16,
+                  }}
+                >
+                  <VolumeTrendSVG rolling={data.volume.rolling_7d_trend} />
+                  <VolumeMethodologyPanel />
+                </div>
+                <VolumeChannelTable volume={data.volume} />
+                <MofRemartDailyTable mof={data.volume.mof_remarketing} />
+                <TOFAttributionTable tof={data.volume.tof} />
+                <RollingChannelTrendTable rolling={data.volume.rolling_7d_trend} />
+              </>
+            )}
 
             {/* ============================================================
                 QUALITY DASHBOARD — matches the canonical Lead Quality skill

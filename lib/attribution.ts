@@ -378,6 +378,48 @@ export function categorizeStage(stageName: string): StageCategory {
   return STAGE_CATEGORY_MAP[key] || 'OTHER';
 }
 
+// ===========================================================================
+// FRESH LEAD FILTER — excludes referrals + lead-lost-returns from Volume Report
+// (matches the canonical mim-essay-volume-report skill's totals exclusions)
+// ===========================================================================
+
+/**
+ * "Fresh" lead = brand-matched MiM Essay lead AND not a referral AND not a
+ * sales-team reactivation of an old "Lead Lost" lead. Used by the Volume
+ * Report to compute Total Leads / Total Spend / Overall CPL.
+ */
+export function isFreshLead(lead: MimLead): boolean {
+  if (!isMimEssayLead(lead)) return false;
+  const analyticsRaw = String(lead.analytics_source || lead.shortened_source || '')
+    .toLowerCase()
+    .trim();
+  // analytics_source = 'referral' (operations referrals)
+  if (analyticsRaw === 'referral' || analyticsRaw.startsWith('referral|')) return false;
+  // source or initial_source contains "lead lost return" (sales reactivations)
+  const allSource = `${lead.source || ''} ${lead.initial_source || ''} ${lead.initial_source_string || ''}`.toLowerCase();
+  if (allSource.includes('lead lost return') || allSource.includes('lead-lost-return')) return false;
+  return true;
+}
+
+// ===========================================================================
+// TOF ATTRIBUTION WEIGHTS
+// (matches the canonical mim-essay-volume-report skill's TOF v2.1 framework)
+// ===========================================================================
+
+/** Maps a channel name (as classified) to its TOF attribution weight (0-1). */
+export function tofWeightForChannel(channel: string): number | null {
+  const c = (channel || '').trim();
+  if (c === 'ManyChat') return 1.0;
+  if (c === 'Instagram') return 1.0;
+  if (c === 'YouTube') return 1.0;
+  if (c === 'FB Organic') return 1.0;
+  if (c === 'Google Ads') return 0.8;
+  if (c === 'SEO / Organic') return 0.75;
+  // 'Direct' is also TOF-attributable per skill, but we don't classify a
+  // separate 'Direct' channel in attribution.ts. Combine with SEO/Organic.
+  return null; // Channel doesn't qualify for TOF attribution
+}
+
 export function detectQuality(
   lead: MimLead,
   stageName: string

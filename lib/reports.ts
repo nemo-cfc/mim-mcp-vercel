@@ -14,7 +14,9 @@ import { fetchLeadsForRange } from './mim-essay-api';
 import {
   enrichLead,
   isMimEssayLead,
+  isFreshLead,
   categorizeStage,
+  tofWeightForChannel,
   type MimLead,
   type EnrichedLead,
   type StageCategory,
@@ -172,6 +174,89 @@ export interface CombinedDashboard extends VolumeReport {
   insights?: string;
   /** Quality view extensions — populated when focal_date is set */
   quality?: QualityContext;
+  /** Volume view extensions — populated when focal_date is set */
+  volume?: VolumeContext;
+}
+
+// =============================================================================
+// Volume Context (canonical Lead Volume Report shape)
+// =============================================================================
+
+export interface VolumeContext {
+  focal_date: string;
+  weekday: string; // "Sunday"
+  date_range_label: string; // "27 Apr – 03 May 2026"
+
+  // 5 summary cards
+  total_leads: number;
+  total_spend: number; // Cold + MOF Remart + Google
+  overall_cpl: number;
+  delta_leads_vs_7d_avg: number;
+  delta_leads_vs_prev: number;
+  delta_cpl_vs_7d_avg: number;
+  delta_cpl_vs_prev: number;
+  trailing_7d: { leads: number; spend: number; avg_leads: number; avg_cpl: number; total_spend: number };
+  prev_day: { leads: number; spend: number; cpl: number };
+
+  mof_remarketing: {
+    leads: number;
+    spend: number;
+    cpl: number;
+    prev_leads: number;
+    avg_leads_7d: number;
+    avg_cpl_7d: number;
+    daily: Array<{ date: string; weekday: string; leads: number; spend: number; cpl: number; is_focal: boolean }>;
+    trailing_7d: { leads: number; spend: number };
+  };
+
+  tof: {
+    leads: number; // raw TOF leads on focal day
+    attributed: number; // weighted
+    spend: number; // C3 + C5 lanes
+    cpl: number; // attributed CPL
+    avg_leads_7d: number;
+    avg_attributed_7d: number;
+    avg_cpl_7d: number;
+    sub_channels: Array<{
+      sub_channel: string;
+      weight: number; // 0-1
+      leads: number;
+      attributed: number;
+      delta_vs_prev: number;
+      avg_7d: number;
+      delta_vs_7d: number;
+    }>;
+  };
+
+  // Channel breakdown table (canonical schema row order)
+  channel_breakdown: Array<{
+    channel: string;
+    leads: number;
+    spend: number | null; // null = organic / not applicable
+    cpl: number | null;
+    prev_leads: number;
+    avg_leads_7d: number;
+    avg_cpl_7d: number | null;
+    delta_leads_vs_7d: number;
+    delta_cpl_vs_7d: number | null;
+    is_summary_row: boolean; // amber bg for MOF / TOF
+  }>;
+
+  // Rolling 7d trend table (date-by-channel)
+  rolling_7d_trend: Array<{
+    date: string;
+    weekday: string;
+    cold_meta: number;
+    remart_meta: number;
+    manychat: number;
+    google_ads: number;
+    youtube: number;
+    instagram: number;
+    seo_direct: number;
+    others: number;
+    total: number;
+    is_focal: boolean;
+  }>;
 }
 
 export interface QualityContext {
@@ -952,6 +1037,371 @@ export async function buildVolumeReport(
               channels: qualityChannels,
               daily_quality,
               insight_bullets,
+            };
+          }
+
+          // ---- Volume context (matches canonical Lead Volume Report skill) ----
+          {
+            // Re-derive shared windows (same scope rules as Quality block)
+            const trailingDates = daily_trend
+              .slice(Math.max(0, focalIdx - 7), focalIdx)
+              .map((r) => r.date);
+            const window7Dates = daily_trend.slice(Math.max(0, focalIdx - 6), focalIdx + 1);
+            const prevDate = trailingDates[trailingDates.length - 1] || '';
+
+            const dateOf = (l: EnrichedLead) =>
+              ((dateField === 'booked_at' ? l.booked_at : l.created_at) || '').slice(0, 10);
+            const weekdayName = (dateStr: string) => {
+              const d = new Date(dateStr + 'T00:00:00Z');
+              return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][d.getUTCDay()];
+            };
+            const weekdayLong = (dateStr: string) => {
+              const d = new Date(dateStr + 'T00:00:00Z');
+              return ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getUTCDay()];
+            };
+            const fmtDayLabel = (dateStr: string) => {
+              const d = new Date(dateStr + 'T00:00:00Z');
+              return d.toLocaleDateString('en-GB', {
+                day: 'numeric',
+                month: 'short',
+                timeZone: 'UTC',
+              });
+            };
+
+            // Re-enrich with the FRESH-LEAD filter (excludes referrals + lead-lost-returns).
+            const allFresh: EnrichedLead[] = [];
+            for (const lead of crmRes.leads) {
+              if (!isFreshLead(lead)) continue;
+              const e = enrichLead(lead);
+              const d = dateOf(e);
+              if (!d || d < range.from || d > range.to) continue;
+              allFresh.push(e);
+            }
+
+            // Map channel name -> internal grouping label (matches reference rows).
+            const groupChannel = (channelName: string): string => {
+              const c = channelName.startsWith('Cold Leads - Meta') ? 'Cold Leads - Meta' : channelName;
+              if (c === 'Cold Leads - Meta') return 'Cold Leads - Meta';
+              if (c === 'MOF Remarketing') return 'MOF Remarketing (Meta)';
+              if (c === 'Google Ads') return 'Google Ads';
+              if (c === 'ManyChat') return 'ManyChat';
+              if (c === 'SEO / Organic') return 'SEO/Direct';
+              if (c === 'YouTube') return 'YouTube';
+              if (c === 'Instagram') return 'Instagram';
+              if (c === 'FB Organic') return 'FB Organic';
+              if (c === 'Email') return 'Email';
+              return 'Others (YT/IG/FB/Direct)';
+            };
+
+            const focalFresh = allFresh.filter((l) => dateOf(l) === focalDate);
+            const trailingFresh = allFresh.filter((l) =>
+              trailingDates.includes(dateOf(l))
+            );
+            const prevFresh = allFresh.filter((l) => dateOf(l) === prevDate);
+
+            // Spend mapping per the skill:
+            //   Cold = C7+C8 → meta_lanes['C1-Cold'] (we map COLD/CBO to that lane)
+            //   MOF Remart = C2-Remarketing
+            //   TOF = C3 + C5
+            //   Overall CPL = (Cold + MOF Remart + Google) / Fresh Leads
+            const laneSpendOn = (date: string, laneFilter: (lane: string) => boolean) => {
+              // Find that day's spend-by-lane requires per-day lane data we don't
+              // have at the level of the daily_meta endpoint. Approximate:
+              // proportionally scale window-level lane spend by daily-trend share.
+              const totalMetaWindow = meta_lanes.reduce(
+                (s, l) => (laneFilter(l.lane) ? s + l.spend : s),
+                0
+              );
+              const totalDailyMetaWindow = daily_trend.reduce(
+                (s, r) => s + r.spend_meta,
+                0
+              );
+              if (totalDailyMetaWindow === 0) return 0;
+              const dayRow = daily_trend.find((r) => r.date === date);
+              const dayShare = dayRow ? dayRow.spend_meta / totalDailyMetaWindow : 0;
+              return totalMetaWindow * dayShare;
+            };
+            const coldSpendOn = (date: string) =>
+              laneSpendOn(date, (l) => l === 'C1-Cold');
+            const remartSpendOn = (date: string) =>
+              laneSpendOn(date, (l) => l === 'C2-Remarketing');
+            const tofSpendOn = (date: string) =>
+              laneSpendOn(date, (l) => l === 'C3-ThruPlay' || l === 'C5-Engagement');
+            const googleSpendOn = (date: string) => {
+              const dayRow = daily_trend.find((r) => r.date === date);
+              return dayRow ? dayRow.spend_google : 0;
+            };
+
+            const focalCold = coldSpendOn(focalDate);
+            const focalRemart = remartSpendOn(focalDate);
+            const focalTof = tofSpendOn(focalDate);
+            const focalGoogle = googleSpendOn(focalDate);
+            const focalSpendV = focalCold + focalRemart + focalGoogle;
+            const focalCpl = focalFresh.length > 0 ? focalSpendV / focalFresh.length : 0;
+
+            const trailingSpend = trailingDates.reduce(
+              (s, d) => s + coldSpendOn(d) + remartSpendOn(d) + googleSpendOn(d),
+              0
+            );
+            const trailingDays = trailingDates.length || 1;
+            const trailingAvgLeadsV = trailingFresh.length / trailingDays;
+            const trailingAvgCpl =
+              trailingFresh.length > 0 ? trailingSpend / trailingFresh.length : 0;
+
+            const prevCold = prevDate ? coldSpendOn(prevDate) : 0;
+            const prevRemart = prevDate ? remartSpendOn(prevDate) : 0;
+            const prevGoogle = prevDate ? googleSpendOn(prevDate) : 0;
+            const prevSpend = prevCold + prevRemart + prevGoogle;
+            const prevCpl = prevFresh.length > 0 ? prevSpend / prevFresh.length : 0;
+
+            // Per-channel rollup
+            type ChAggV = { leads: number; spend: number };
+            const focalByGroup = new Map<string, ChAggV>();
+            const prevByGroup = new Map<string, ChAggV>();
+            const trailByGroup = new Map<string, ChAggV>();
+            const tally = (
+              map: Map<string, ChAggV>,
+              key: string,
+              leadsDelta: number,
+              spendDelta: number
+            ) => {
+              const a = map.get(key) || { leads: 0, spend: 0 };
+              a.leads += leadsDelta;
+              a.spend += spendDelta;
+              map.set(key, a);
+            };
+            for (const l of focalFresh) tally(focalByGroup, groupChannel(l.channel), 1, 0);
+            for (const l of prevFresh) tally(prevByGroup, groupChannel(l.channel), 1, 0);
+            for (const l of trailingFresh) tally(trailByGroup, groupChannel(l.channel), 1, 0);
+
+            // Spend per group (focal day)
+            focalByGroup.set('Cold Leads - Meta', {
+              ...(focalByGroup.get('Cold Leads - Meta') || { leads: 0, spend: 0 }),
+              spend: focalCold,
+            });
+            focalByGroup.set('MOF Remarketing (Meta)', {
+              ...(focalByGroup.get('MOF Remarketing (Meta)') || { leads: 0, spend: 0 }),
+              spend: focalRemart,
+            });
+            focalByGroup.set('Google Ads', {
+              ...(focalByGroup.get('Google Ads') || { leads: 0, spend: 0 }),
+              spend: focalGoogle,
+            });
+            // Spend per group (trailing 7d) — for avg CPL
+            const trailColdSpend = trailingDates.reduce((s, d) => s + coldSpendOn(d), 0);
+            const trailRemartSpend = trailingDates.reduce((s, d) => s + remartSpendOn(d), 0);
+            const trailGoogleSpend = trailingDates.reduce((s, d) => s + googleSpendOn(d), 0);
+            trailByGroup.set('Cold Leads - Meta', {
+              ...(trailByGroup.get('Cold Leads - Meta') || { leads: 0, spend: 0 }),
+              spend: trailColdSpend,
+            });
+            trailByGroup.set('MOF Remarketing (Meta)', {
+              ...(trailByGroup.get('MOF Remarketing (Meta)') || { leads: 0, spend: 0 }),
+              spend: trailRemartSpend,
+            });
+            trailByGroup.set('Google Ads', {
+              ...(trailByGroup.get('Google Ads') || { leads: 0, spend: 0 }),
+              spend: trailGoogleSpend,
+            });
+
+            const buildChannelRow = (
+              key: string,
+              isSpend: boolean,
+              isSummary: boolean
+            ) => {
+              const f = focalByGroup.get(key) || { leads: 0, spend: 0 };
+              const p = prevByGroup.get(key) || { leads: 0, spend: 0 };
+              const t = trailByGroup.get(key) || { leads: 0, spend: 0 };
+              const avgLeads7d = t.leads / trailingDays;
+              const avgCpl7d = isSpend && t.leads > 0 ? t.spend / t.leads : null;
+              const focalCplCh = isSpend && f.leads > 0 ? f.spend / f.leads : null;
+              return {
+                channel: key,
+                leads: f.leads,
+                spend: isSpend ? +f.spend.toFixed(2) : null,
+                cpl: focalCplCh !== null ? +focalCplCh.toFixed(2) : null,
+                prev_leads: p.leads,
+                avg_leads_7d: +avgLeads7d.toFixed(1),
+                avg_cpl_7d: avgCpl7d !== null ? +avgCpl7d.toFixed(2) : null,
+                delta_leads_vs_7d: +(f.leads - avgLeads7d).toFixed(1),
+                delta_cpl_vs_7d:
+                  avgCpl7d !== null && focalCplCh !== null
+                    ? +(focalCplCh - avgCpl7d).toFixed(2)
+                    : null,
+                is_summary_row: isSummary,
+              };
+            };
+
+            // TOF Attribution Summary
+            const tofChannelDef: Array<{ channel: string; sub_channel: string; weight: number }> = [
+              { channel: 'ManyChat', sub_channel: 'ManyChat', weight: 1.0 },
+              { channel: 'Instagram', sub_channel: 'Instagram', weight: 1.0 },
+              { channel: 'YouTube', sub_channel: 'YouTube', weight: 1.0 },
+              { channel: 'FB Organic', sub_channel: 'FB Organic', weight: 1.0 },
+              { channel: 'Google Ads', sub_channel: 'Google Ads', weight: 0.8 },
+              { channel: 'SEO / Organic', sub_channel: 'SEO/Direct', weight: 0.75 },
+            ];
+            const tofRows = tofChannelDef.map(({ channel, sub_channel, weight }) => {
+              const fLeads = focalFresh.filter((l) => l.channel === channel).length;
+              const pLeads = prevFresh.filter((l) => l.channel === channel).length;
+              const tLeads = trailingFresh.filter((l) => l.channel === channel).length;
+              const fAttr = fLeads * weight;
+              const pAttr = pLeads * weight;
+              const tAttr = tLeads * weight;
+              const avg7d = tAttr / trailingDays;
+              return {
+                sub_channel,
+                weight,
+                leads: fLeads,
+                attributed: +fAttr.toFixed(1),
+                delta_vs_prev: +(fAttr - pAttr).toFixed(1),
+                avg_7d: +avg7d.toFixed(1),
+                delta_vs_7d: +(fAttr - avg7d).toFixed(1),
+              };
+            });
+            const tofLeadsFocal = tofRows.reduce((s, r) => s + r.leads, 0);
+            const tofAttrFocal = tofRows.reduce((s, r) => s + r.attributed, 0);
+            const tofAttrTrail =
+              trailingFresh.reduce((s, l) => {
+                const w = tofWeightForChannel(l.channel);
+                return w !== null ? s + w : s;
+              }, 0) || 0;
+            const tofLeadsTrail =
+              trailingFresh.filter((l) => tofWeightForChannel(l.channel) !== null).length;
+            const tofSpendTrail = trailingDates.reduce((s, d) => s + tofSpendOn(d), 0);
+            const tofCplFocal = tofAttrFocal > 0 ? focalTof / tofAttrFocal : 0;
+            const tofCplTrail = tofAttrTrail > 0 ? tofSpendTrail / tofAttrTrail : 0;
+
+            // MOF Remart daily breakdown
+            const mofDaily = window7Dates.map((row) => {
+              const leadsThatDay = allFresh.filter(
+                (l) => dateOf(l) === row.date && l.channel === 'MOF Remarketing'
+              ).length;
+              const spendThatDay = remartSpendOn(row.date);
+              return {
+                date: row.date,
+                weekday: weekdayName(row.date),
+                leads: leadsThatDay,
+                spend: +spendThatDay.toFixed(2),
+                cpl: leadsThatDay > 0 ? +(spendThatDay / leadsThatDay).toFixed(2) : 0,
+                is_focal: row.date === focalDate,
+              };
+            });
+            const mofTrailingLeads = mofDaily.slice(0, -1).reduce((s, d) => s + d.leads, 0);
+            const mofTrailingSpend = mofDaily.slice(0, -1).reduce((s, d) => s + d.spend, 0);
+            const mofFocalLeads = focalByGroup.get('MOF Remarketing (Meta)')?.leads || 0;
+            const mofPrevLeads = prevByGroup.get('MOF Remarketing (Meta)')?.leads || 0;
+
+            // Rolling 7d trend by channel (date-by-channel)
+            const rolling = window7Dates.map((row) => {
+              const dayLeads = allFresh.filter((l) => dateOf(l) === row.date);
+              const counts = {
+                cold_meta: dayLeads.filter((l) => l.channel.startsWith('Cold Leads - Meta')).length,
+                remart_meta: dayLeads.filter((l) => l.channel === 'MOF Remarketing').length,
+                manychat: dayLeads.filter((l) => l.channel === 'ManyChat').length,
+                google_ads: dayLeads.filter((l) => l.channel === 'Google Ads').length,
+                youtube: dayLeads.filter((l) => l.channel === 'YouTube').length,
+                instagram: dayLeads.filter((l) => l.channel === 'Instagram').length,
+                seo_direct: dayLeads.filter((l) => l.channel === 'SEO / Organic').length,
+                others: 0,
+              };
+              const tracked =
+                counts.cold_meta +
+                counts.remart_meta +
+                counts.manychat +
+                counts.google_ads +
+                counts.youtube +
+                counts.instagram +
+                counts.seo_direct;
+              counts.others = Math.max(0, dayLeads.length - tracked);
+              return {
+                date: row.date,
+                weekday: weekdayName(row.date),
+                ...counts,
+                total: dayLeads.length,
+                is_focal: row.date === focalDate,
+              };
+            });
+
+            // Channel breakdown rows (canonical order)
+            const channel_breakdown = [
+              buildChannelRow('MOF Remarketing (Meta)', true, true),
+              {
+                channel: 'TOF (Attributed)',
+                leads: tofLeadsFocal,
+                spend: +focalTof.toFixed(2),
+                cpl: tofAttrFocal > 0 ? +tofCplFocal.toFixed(2) : null,
+                prev_leads: tofRows.reduce((s, r) => s + (r.leads - r.delta_vs_prev), 0),
+                avg_leads_7d: +(tofLeadsTrail / trailingDays).toFixed(1),
+                avg_cpl_7d: tofAttrTrail > 0 ? +tofCplTrail.toFixed(2) : null,
+                delta_leads_vs_7d: +(tofLeadsFocal - tofLeadsTrail / trailingDays).toFixed(1),
+                delta_cpl_vs_7d:
+                  tofAttrTrail > 0
+                    ? +(tofCplFocal - tofCplTrail).toFixed(2)
+                    : null,
+                is_summary_row: true,
+              },
+              buildChannelRow('Cold Leads - Meta', true, false),
+              buildChannelRow('Google Ads', true, false),
+              buildChannelRow('ManyChat', false, false),
+              buildChannelRow('SEO/Direct', false, false),
+              buildChannelRow('Meta Ads (Other)', false, false),
+              buildChannelRow('Others (YT/IG/FB/Direct)', false, false),
+            ];
+
+            const dateRangeLabel = `${fmtDayLabel(window7Dates[0]?.date || range.from)} – ${fmtDayLabel(focalDate)} ${focalDate.slice(0, 4)}`;
+
+            dashboard.volume = {
+              focal_date: focalDate,
+              weekday: weekdayLong(focalDate),
+              date_range_label: dateRangeLabel,
+              total_leads: focalFresh.length,
+              total_spend: +focalSpendV.toFixed(2),
+              overall_cpl: +focalCpl.toFixed(2),
+              delta_leads_vs_7d_avg: +(focalFresh.length - trailingAvgLeadsV).toFixed(1),
+              delta_leads_vs_prev: focalFresh.length - prevFresh.length,
+              delta_cpl_vs_7d_avg: +(focalCpl - trailingAvgCpl).toFixed(2),
+              delta_cpl_vs_prev: +(focalCpl - prevCpl).toFixed(2),
+              trailing_7d: {
+                leads: trailingFresh.length,
+                spend: +trailingSpend.toFixed(2),
+                avg_leads: +trailingAvgLeadsV.toFixed(1),
+                avg_cpl: +trailingAvgCpl.toFixed(2),
+                total_spend: +trailingSpend.toFixed(2),
+              },
+              prev_day: {
+                leads: prevFresh.length,
+                spend: +prevSpend.toFixed(2),
+                cpl: +prevCpl.toFixed(2),
+              },
+              mof_remarketing: {
+                leads: mofFocalLeads,
+                spend: +focalRemart.toFixed(2),
+                cpl: mofFocalLeads > 0 ? +(focalRemart / mofFocalLeads).toFixed(2) : 0,
+                prev_leads: mofPrevLeads,
+                avg_leads_7d: +(mofTrailingLeads / trailingDays).toFixed(1),
+                avg_cpl_7d:
+                  mofTrailingLeads > 0
+                    ? +(mofTrailingSpend / mofTrailingLeads).toFixed(2)
+                    : 0,
+                daily: mofDaily,
+                trailing_7d: {
+                  leads: mofTrailingLeads,
+                  spend: +mofTrailingSpend.toFixed(2),
+                },
+              },
+              tof: {
+                leads: tofLeadsFocal,
+                attributed: +tofAttrFocal.toFixed(1),
+                spend: +focalTof.toFixed(2),
+                cpl: tofAttrFocal > 0 ? +tofCplFocal.toFixed(2) : 0,
+                avg_leads_7d: +(tofLeadsTrail / trailingDays).toFixed(1),
+                avg_attributed_7d: +(tofAttrTrail / trailingDays).toFixed(1),
+                avg_cpl_7d: tofAttrTrail > 0 ? +tofCplTrail.toFixed(2) : 0,
+                sub_channels: tofRows,
+              },
+              channel_breakdown,
+              rolling_7d_trend: rolling,
             };
           }
 
