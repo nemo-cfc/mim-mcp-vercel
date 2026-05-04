@@ -1,35 +1,26 @@
 /**
- * Server-side helpers for the webapp's cookie-based auth.
- * Reuses MCP_BEARER_TOKEN — no separate secret to manage.
+ * Web auth helpers — session-cookie + user-role based.
+ *
+ * The webapp (/dashboard, /admin) uses email+password login; user records and
+ * sessions live in Redis (see lib/users.ts). The MCP HTTP transport endpoint
+ * (/api/mcp) is unaffected — it still verifies MCP_BEARER_TOKEN.
  */
 import { cookies } from 'next/headers';
+import { authenticateRequest, SESSION_COOKIE_NAME, type User } from './users';
 
-export const AUTH_COOKIE_NAME = 'mim_dashboard_auth';
-const COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60; // 30 days
+export { SESSION_COOKIE_NAME };
 
-export function isAuthed(): boolean {
-  const expected = process.env.MCP_BEARER_TOKEN;
-  if (!expected) return false;
-  const c = cookies().get(AUTH_COOKIE_NAME);
-  return Boolean(c?.value && c.value === expected);
+/** Returns the authenticated user or null. Requires Redis. */
+export async function getCurrentUser(): Promise<User | null> {
+  const c = cookies().get(SESSION_COOKIE_NAME);
+  return authenticateRequest(c?.value);
 }
 
-export function checkToken(token: string): boolean {
-  const expected = process.env.MCP_BEARER_TOKEN;
-  return Boolean(expected && token === expected);
+export async function isAuthed(): Promise<boolean> {
+  return Boolean(await getCurrentUser());
 }
 
-/**
- * Used by route handlers to set the auth cookie after a successful login.
- */
-export function buildAuthCookie(token: string) {
-  return {
-    name: AUTH_COOKIE_NAME,
-    value: token,
-    httpOnly: true,
-    secure: true,
-    sameSite: 'lax' as const,
-    path: '/',
-    maxAge: COOKIE_MAX_AGE_SECONDS,
-  };
+export async function isAdmin(): Promise<boolean> {
+  const u = await getCurrentUser();
+  return Boolean(u && u.role === 'admin');
 }

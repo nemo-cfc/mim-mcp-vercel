@@ -62,6 +62,8 @@ export function DateControls(props: {
   focal: string;
   dateField: 'created_at' | 'booked_at';
   loading?: boolean;
+  userEmail?: string;
+  isAdmin?: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -148,7 +150,26 @@ export function DateControls(props: {
       >
         {busy ? 'Loading…' : 'Apply'}
       </button>
-      <div style={{ marginLeft: 'auto' }}>
+      <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 8 }}>
+        {props.userEmail && (
+          <span style={{ fontSize: 12, color: '#666' }}>{props.userEmail}</span>
+        )}
+        {props.isAdmin && (
+          <a
+            href="/admin"
+            style={{
+              padding: '6px 10px',
+              background: '#fafafa',
+              border: '1px solid #ddd',
+              borderRadius: 8,
+              fontSize: 12,
+              color: '#444',
+              textDecoration: 'none',
+            }}
+          >
+            Admin
+          </a>
+        )}
         <button
           onClick={logout}
           style={{

@@ -1,19 +1,18 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import { AUTH_COOKIE_NAME } from '@/lib/web-auth';
+
+const SESSION_COOKIE_NAME = 'mim_dashboard_session';
 
 /**
- * Protect /dashboard. The actual token comparison is done in lib/web-auth.ts
- * (server components / API routes). Middleware only checks for *presence*
- * of the auth cookie — if missing, redirect to /login. Pages double-check
- * the value via isAuthed().
+ * Gate /dashboard and /admin behind a session cookie. Actual user lookup +
+ * role check happens server-side in the page/route handler (we can't use
+ * Redis from middleware without bringing the full client into Edge runtime).
  *
- * /api/* is left to its own auth (the MCP route already verifies bearer
- * tokens, the web/auth login endpoint is intentionally open).
+ * /api/web/auth and /login stay open. /api/mcp keeps its bearer-token auth.
  */
 export function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
 
-  // Allow login page + login API + assets through.
+  // Public paths.
   if (
     pathname === '/login' ||
     pathname.startsWith('/api/web/auth') ||
@@ -23,15 +22,14 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Only gate /dashboard for now (landing page stays public).
-  if (!pathname.startsWith('/dashboard')) {
+  // Only gate /dashboard and /admin.
+  if (!pathname.startsWith('/dashboard') && !pathname.startsWith('/admin')) {
     return NextResponse.next();
   }
 
-  const cookie = req.cookies.get(AUTH_COOKIE_NAME);
+  const cookie = req.cookies.get(SESSION_COOKIE_NAME);
   if (cookie?.value) return NextResponse.next();
 
-  // Redirect to /login with the original path so we can come back after.
   const loginUrl = req.nextUrl.clone();
   loginUrl.pathname = '/login';
   loginUrl.search = '';
@@ -42,5 +40,5 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/dashboard/:path*'],
+  matcher: ['/dashboard/:path*', '/admin/:path*'],
 };

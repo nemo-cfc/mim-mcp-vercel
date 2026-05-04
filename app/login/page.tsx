@@ -7,7 +7,8 @@ function LoginForm() {
   const router = useRouter();
   const params = useSearchParams();
   const next = params.get('next') || '/dashboard';
-  const [token, setToken] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,7 +20,7 @@ function LoginForm() {
       const res = await fetch('/api/web/auth', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: token.trim() }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -58,27 +59,36 @@ function LoginForm() {
         }}
       >
         <h1 style={{ fontSize: 22, margin: '0 0 4px' }}>MiM Essay Dashboard</h1>
-        <p style={{ color: '#666', fontSize: 13, margin: '0 0 18px' }}>
-          Enter your bearer token to access the dashboard.
-        </p>
-        <input
-          type="password"
-          autoComplete="current-password"
-          autoFocus
-          placeholder="Bearer token"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          style={{
-            width: '100%',
-            padding: '10px 12px',
-            border: '1px solid #ddd',
-            borderRadius: 8,
-            fontSize: 14,
-            fontFamily: 'inherit',
-            boxSizing: 'border-box',
-          }}
-          disabled={busy}
-        />
+        <p style={{ color: '#666', fontSize: 13, margin: '0 0 18px' }}>Sign in with your email.</p>
+
+        <label style={{ display: 'block', marginBottom: 12 }}>
+          <span style={labelStyle}>Email</span>
+          <input
+            type="email"
+            autoComplete="username"
+            placeholder="you@mim-essay.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            style={inputStyle}
+            disabled={busy}
+            required
+          />
+        </label>
+
+        <label style={{ display: 'block' }}>
+          <span style={labelStyle}>Password</span>
+          <input
+            type="password"
+            autoComplete="current-password"
+            placeholder="••••••••"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            style={inputStyle}
+            disabled={busy}
+            required
+          />
+        </label>
+
         {error && (
           <div
             style={{
@@ -93,9 +103,10 @@ function LoginForm() {
             {error}
           </div>
         )}
+
         <button
           type="submit"
-          disabled={busy || !token.trim()}
+          disabled={busy || !email.trim() || !password}
           style={{
             marginTop: 14,
             width: '100%',
@@ -115,6 +126,25 @@ function LoginForm() {
     </main>
   );
 }
+
+const labelStyle: React.CSSProperties = {
+  display: 'block',
+  fontSize: 11,
+  fontWeight: 600,
+  textTransform: 'uppercase',
+  color: '#666',
+  marginBottom: 4,
+};
+
+const inputStyle: React.CSSProperties = {
+  width: '100%',
+  padding: '10px 12px',
+  border: '1px solid #ddd',
+  borderRadius: 8,
+  fontSize: 14,
+  fontFamily: 'inherit',
+  boxSizing: 'border-box',
+};
 
 export default function LoginPage() {
   return (

@@ -5,7 +5,7 @@
  * checks via isAuthed() to avoid an unauthenticated render path.
  */
 import { redirect } from 'next/navigation';
-import { isAuthed } from '@/lib/web-auth';
+import { getCurrentUser } from '@/lib/web-auth';
 import { buildVolumeReport } from '@/lib/reports';
 import {
   DateControls,
@@ -54,7 +54,8 @@ function daysAgo(d: string, n: number): string {
 export default async function DashboardPage(props: {
   searchParams: { from?: string; to?: string; focal?: string; date_field?: string };
 }) {
-  if (!isAuthed()) redirect('/login');
+  const user = await getCurrentUser();
+  if (!user) redirect('/login');
 
   // Default: 14-day window ending yesterday, focal = yesterday.
   const now = todayISO();
@@ -117,7 +118,14 @@ export default async function DashboardPage(props: {
           </div>
         </header>
 
-        <DateControls from={from} to={to} focal={focal} dateField={dateField} />
+        <DateControls
+          from={from}
+          to={to}
+          focal={focal}
+          dateField={dateField}
+          userEmail={user.email}
+          isAdmin={user.role === 'admin'}
+        />
 
         {error && (
           <div
