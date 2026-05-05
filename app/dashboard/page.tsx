@@ -28,6 +28,7 @@ import {
   MofRemartDailyTable,
   TOFAttributionTable,
   RollingChannelTrendTable,
+  VolumeInsightsPanel,
   QualitySummaryCards,
   QualityTrendSVG,
   QualityDefinitionsPanel,
@@ -170,6 +171,7 @@ export default async function DashboardPage(props: {
                 <MofRemartDailyTable mof={data.volume.mof_remarketing} />
                 <TOFAttributionTable tof={data.volume.tof} />
                 <RollingChannelTrendTable rolling={data.volume.rolling_7d_trend} />
+                <VolumeInsightsPanel bullets={data.volume.insight_bullets} />
               </>
             )}
 

@@ -801,6 +801,21 @@ export function RollingChannelTrendTable(props: { rolling: any[] }) {
   );
 }
 
+export function VolumeInsightsPanel(props: { bullets?: string[] }) {
+  if (!props.bullets?.length) return null;
+  return (
+    <Section title="Key Insights — Volume">
+      <div style={{ ...styles.card, padding: 12, background: '#fafafa' }}>
+        <ul style={{ margin: 0, paddingLeft: 18, fontSize: 13, lineHeight: 1.7 }}>
+          {props.bullets.map((b, i) => (
+            <li key={i}>{b}</li>
+          ))}
+        </ul>
+      </div>
+    </Section>
+  );
+}
+
 // ===========================================================================
 // QUALITY DASHBOARD COMPONENTS — match the canonical Lead Quality Report skill
 // ===========================================================================

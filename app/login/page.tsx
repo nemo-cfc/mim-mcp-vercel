@@ -28,7 +28,12 @@ function LoginForm() {
         setBusy(false);
         return;
       }
-      router.push(next);
+      // Don't route a non-admin to /admin (that page would just redirect
+      // them back to /dashboard anyway — skip the round trip).
+      const data = await res.json().catch(() => ({}));
+      const target =
+        next.startsWith('/admin') && data?.role !== 'admin' ? '/dashboard' : next;
+      router.push(target);
     } catch (e: any) {
       setError(e?.message || 'network error');
       setBusy(false);
