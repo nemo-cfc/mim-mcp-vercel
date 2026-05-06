@@ -1355,6 +1355,8 @@ export async function buildVolumeReport(
             const dateRangeLabel = `${fmtDayLabel(window7Dates[0]?.date || range.from)} – ${fmtDayLabel(focalDate)} ${focalDate.slice(0, 4)}`;
 
             // ---- Volume insights (emoji-led bullets) ----
+            // Always emits a snapshot bullet + at least one channel callout
+            // so the panel never renders empty even on quiet days.
             const volumeInsights: string[] = [];
             const focalLeadsV = focalFresh.length;
             const deltaLeads7d = focalLeadsV - trailingAvgLeadsV;
@@ -1365,7 +1367,12 @@ export async function buildVolumeReport(
             const cplPctVs7d =
               trailingAvgCpl > 0 ? (deltaCpl7d / trailingAvgCpl) * 100 : 0;
 
-            // Lead volume direction
+            // Snapshot — always emit
+            volumeInsights.push(
+              `📋 ${focalLeadsV} leads on ${focalDate} (${weekdayLong(focalDate)}) at ₹${fmt(focalCpl)} CPL · spend ₹${fmt(focalSpendV)}.`
+            );
+
+            // Lead volume direction (always emit some signal)
             if (focalLeadsV > 0 && trailingAvgLeadsV > 0) {
               if (pctVs7d <= -15) {
                 volumeInsights.push(
@@ -1375,19 +1382,27 @@ export async function buildVolumeReport(
                 volumeInsights.push(
                   `📈 Lead volume up +${deltaLeads7d.toFixed(0)} (+${pctVs7d.toFixed(0)}%) vs 7D avg of ${trailingAvgLeadsV.toFixed(0)} — momentum, hold spend.`
                 );
+              } else {
+                volumeInsights.push(
+                  `📊 Volume in line with 7D avg (${focalLeadsV} vs ${trailingAvgLeadsV.toFixed(0)}, ${pctVs7d >= 0 ? '+' : ''}${pctVs7d.toFixed(0)}%).`
+                );
               }
             }
 
-            // Day-over-day movement
-            if (deltaLeadsPrev !== 0 && prevFresh.length > 0) {
-              const arrow = deltaLeadsPrev < 0 ? '▼' : '▲';
-              const tag = deltaLeadsPrev < 0 ? '⚠️' : '📊';
-              volumeInsights.push(
-                `${tag} ${arrow} ${Math.abs(deltaLeadsPrev)} leads vs prev day (${prevFresh.length} → ${focalLeadsV}).`
-              );
+            // Day-over-day movement (always emit if prev day had data)
+            if (prevFresh.length > 0) {
+              if (deltaLeadsPrev === 0) {
+                volumeInsights.push(`📊 Flat vs prev day (${prevFresh.length} leads both days).`);
+              } else {
+                const arrow = deltaLeadsPrev < 0 ? '▼' : '▲';
+                const tag = deltaLeadsPrev < 0 ? '⚠️' : '📈';
+                volumeInsights.push(
+                  `${tag} ${arrow} ${Math.abs(deltaLeadsPrev)} leads vs prev day (${prevFresh.length} → ${focalLeadsV}).`
+                );
+              }
             }
 
-            // CPL direction
+            // CPL direction (always emit when both sides have CPL)
             if (focalCpl > 0 && trailingAvgCpl > 0) {
               if (cplPctVs7d >= 15) {
                 volumeInsights.push(
@@ -1397,10 +1412,14 @@ export async function buildVolumeReport(
                 volumeInsights.push(
                   `✅ CPL improved ₹${Math.abs(Math.round(deltaCpl7d))} below 7D avg of ₹${trailingAvgCpl.toFixed(0)} — best efficiency in the window.`
                 );
+              } else {
+                volumeInsights.push(
+                  `💰 CPL in line with 7D avg (₹${focalCpl.toFixed(0)} vs ₹${trailingAvgCpl.toFixed(0)}, ${cplPctVs7d >= 0 ? '+' : ''}${cplPctVs7d.toFixed(0)}%).`
+                );
               }
             }
 
-            // CPL day-over-day
+            // CPL day-over-day spike alert
             if (focalCpl > 0 && prevCpl > 0) {
               const cplPctVsPrev = (deltaCplPrev / prevCpl) * 100;
               if (cplPctVsPrev >= 25) {
@@ -1410,16 +1429,14 @@ export async function buildVolumeReport(
               }
             }
 
-            // MOF Remarketing
-            const mofDeltaLeads = mofFocalLeads - mofTrailingLeads / trailingDays;
-            const mofDeltaPct =
-              mofTrailingLeads / trailingDays > 0
-                ? (mofDeltaLeads / (mofTrailingLeads / trailingDays)) * 100
-                : 0;
-            if (mofTrailingLeads > 0 && Math.abs(mofDeltaPct) >= 30) {
+            // MOF Remarketing (any reasonable signal)
+            const mofAvg = mofTrailingLeads / trailingDays;
+            const mofDeltaLeads = mofFocalLeads - mofAvg;
+            const mofDeltaPct = mofAvg > 0 ? (mofDeltaLeads / mofAvg) * 100 : 0;
+            if (mofTrailingLeads > 0 && Math.abs(mofDeltaPct) >= 20) {
               const tag = mofDeltaLeads < 0 ? '⚠️' : '🔁';
               volumeInsights.push(
-                `${tag} MOF Remarketing leads ${mofDeltaLeads >= 0 ? '+' : ''}${mofDeltaLeads.toFixed(1)} vs 7D avg (${(mofTrailingLeads / trailingDays).toFixed(1)} → ${mofFocalLeads}).`
+                `${tag} MOF Remarketing ${mofDeltaLeads >= 0 ? '+' : ''}${mofDeltaLeads.toFixed(1)} leads vs 7D avg (${mofAvg.toFixed(1)} → ${mofFocalLeads}).`
               );
             }
 
@@ -1428,7 +1445,7 @@ export async function buildVolumeReport(
             if (tofAttrFocal > 0 && tofAvg7d > 0) {
               const tofDelta = tofAttrFocal - tofAvg7d;
               const tofPct = (tofDelta / tofAvg7d) * 100;
-              if (Math.abs(tofPct) >= 25) {
+              if (Math.abs(tofPct) >= 20) {
                 const tag = tofDelta < 0 ? '⚠️' : '🎯';
                 volumeInsights.push(
                   `${tag} TOF attributed ${tofAttrFocal.toFixed(1)} leads ${tofPct >= 0 ? '+' : ''}${tofPct.toFixed(0)}% vs 7D avg (${tofAvg7d.toFixed(1)}).`
@@ -1436,22 +1453,22 @@ export async function buildVolumeReport(
               }
             }
 
-            // Best-performing channel by leads (excluding summary rows)
+            // Best-performing channel by leads (always show if any)
             const realChannelRows = channel_breakdown.filter(
               (c) => !c.is_summary_row && c.leads > 0
             );
             const topByLeads = [...realChannelRows].sort((a, b) => b.leads - a.leads)[0];
-            if (topByLeads && topByLeads.leads >= 3) {
+            if (topByLeads) {
               volumeInsights.push(
                 `🏆 Top channel by volume: ${topByLeads.channel} (${topByLeads.leads} leads${topByLeads.cpl !== null ? `, ₹${topByLeads.cpl} CPL` : ''}).`
               );
             }
 
-            // Most efficient paid channel (lowest CPL where leads >= 3 and spend > 0)
+            // Most efficient paid channel (always show if there's a paid channel with leads)
             const paidEfficient = realChannelRows
-              .filter((c) => c.cpl !== null && c.leads >= 3 && (c.spend || 0) > 0)
+              .filter((c) => c.cpl !== null && c.leads > 0 && (c.spend || 0) > 0)
               .sort((a, b) => (a.cpl as number) - (b.cpl as number))[0];
-            if (paidEfficient && paidEfficient.cpl !== null) {
+            if (paidEfficient && paidEfficient.cpl !== null && paidEfficient !== topByLeads) {
               volumeInsights.push(
                 `💰 Most efficient paid channel: ${paidEfficient.channel} (${paidEfficient.leads} leads @ ₹${paidEfficient.cpl} CPL).`
               );
@@ -1459,7 +1476,7 @@ export async function buildVolumeReport(
 
             // Worst paid CPL (alert)
             const worstPaid = realChannelRows
-              .filter((c) => c.cpl !== null && c.leads >= 3)
+              .filter((c) => c.cpl !== null && c.leads >= 2)
               .sort((a, b) => (b.cpl as number) - (a.cpl as number))[0];
             if (
               worstPaid &&
@@ -1468,7 +1485,7 @@ export async function buildVolumeReport(
               worstPaid !== paidEfficient
             ) {
               volumeInsights.push(
-                `📉 Highest CPL: ${worstPaid.channel} — ₹${worstPaid.cpl} (${worstPaid.leads} leads).`
+                `📉 Highest CPL: ${worstPaid.channel} — ₹${worstPaid.cpl} (${worstPaid.leads} leads). Above the ₹1,103 kill threshold.`
               );
             }
 
