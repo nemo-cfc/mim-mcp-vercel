@@ -21,12 +21,12 @@ import {
   type EnrichedLead,
   type StageCategory,
 } from './attribution';
+import { getGoogleAdsCampaignMetrics } from './pipeboard';
 import {
-  getMetaSpendByAd,
-  getMetaInsights,
-  getGoogleAdsCampaignMetrics,
-  type MetaInsightRow,
-} from './pipeboard';
+  getMetaSpendByAdDirect as getMetaSpendByAd,
+  getMetaDailyAccount,
+  type MetaGraphInsightRow as MetaInsightRow,
+} from './meta-graph';
 import { generateMarketingInsight } from './gemini';
 
 // =============================================================================
@@ -638,14 +638,7 @@ export async function buildVolumeReport(
   const focalDate = opts?.focalDate;
   if (wantTrend) {
     try {
-      const dailyMeta = await getMetaInsights({
-        from: range.from,
-        to: range.to,
-        level: 'account',
-        time_breakdown: 'day',
-        limit: 200,
-        access_token: metaAccessToken,
-      });
+      const dailyMeta = await getMetaDailyAccount(range.from, range.to, metaAccessToken);
       // Index Meta daily totals by date.
       type DailyMetaAgg = {
         spend: number;
@@ -1368,8 +1361,10 @@ export async function buildVolumeReport(
               trailingAvgCpl > 0 ? (deltaCpl7d / trailingAvgCpl) * 100 : 0;
 
             // Snapshot — always emit
+            const fmtINR = (n: number) =>
+              Math.round(n).toLocaleString('en-IN');
             volumeInsights.push(
-              `📋 ${focalLeadsV} leads on ${focalDate} (${weekdayLong(focalDate)}) at ₹${fmt(focalCpl)} CPL · spend ₹${fmt(focalSpendV)}.`
+              `📋 ${focalLeadsV} leads on ${focalDate} (${weekdayLong(focalDate)}) at ₹${fmtINR(focalCpl)} CPL · spend ₹${fmtINR(focalSpendV)}.`
             );
 
             // Lead volume direction (always emit some signal)
