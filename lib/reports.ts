@@ -616,8 +616,20 @@ export async function buildVolumeReport(
 
   const notes: string[] = [];
   if (crmRes.source === 'cache') notes.push('CRM data served from short-TTL cache.');
-  if (metaAds.length === 0) notes.push('Meta Ads spend unavailable for this range.');
-  if (googleRows.length === 0) notes.push('Google Ads spend unavailable for this range.');
+  if (metaAds.length === 0) {
+    notes.push(
+      upstreamErrors.meta
+        ? `Meta Ads upstream error: ${upstreamErrors.meta}`
+        : 'Meta Ads spend unavailable for this range.'
+    );
+  }
+  if (googleRows.length === 0) {
+    notes.push(
+      upstreamErrors.google
+        ? `Google Ads upstream error: ${upstreamErrors.google}`
+        : 'Google Ads spend unavailable for this range.'
+    );
+  }
 
   const dashboard: CombinedDashboard = {
     date_range: range,
