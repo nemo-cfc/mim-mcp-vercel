@@ -21,7 +21,7 @@ import {
   type EnrichedLead,
   type StageCategory,
 } from './attribution';
-import { getGoogleAdsCampaignMetrics } from './pipeboard';
+import { getGoogleAdsCampaignMetricsDirect as getGoogleAdsCampaignMetrics } from './google-ads';
 import {
   getMetaSpendByAdDirect as getMetaSpendByAd,
   getMetaDailyAccount,

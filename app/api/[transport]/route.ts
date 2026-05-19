@@ -10,8 +10,8 @@ import { fetchLeadsForRange, getLeadsCached } from '@/lib/mim-essay-api';
 import { enrichLead, isMimEssayLead } from '@/lib/attribution';
 import { filterLeads, buildChannelMatrix, buildDashboard, type DateField } from '@/lib/aggregations';
 import { buildVolumeReport, buildQualityReport } from '@/lib/reports';
-import { getGoogleAdsTotalSpend } from '@/lib/pipeboard';
 import { getMetaSpendByAdDirect as getMetaSpendByAd } from '@/lib/meta-graph';
+import { getGoogleAdsTotalSpendDirect as getGoogleAdsTotalSpend } from '@/lib/google-ads';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
