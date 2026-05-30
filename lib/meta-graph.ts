@@ -128,6 +128,64 @@ export async function fetchMetaInsights(opts: FetchOpts): Promise<MetaGraphInsig
 }
 
 /**
+ * Batch-fetch Meta status for a list of ad IDs.
+ *
+ * Returns a map: ad_id → { effective_status, configured_status, name }.
+ *
+ *   effective_status   actual delivery state, accounting for parent-level
+ *                      pauses. ACTIVE means the ad is delivering. Common
+ *                      values: ACTIVE, PAUSED, DELETED, ARCHIVED,
+ *                      CAMPAIGN_PAUSED, ADSET_PAUSED, IN_PROCESS,
+ *                      WITH_ISSUES, PENDING_REVIEW, DISAPPROVED.
+ *   configured_status  the ad-level setting only (ignores parent pauses).
+ *
+ * Used to filter kill-candidate recommendations to ads that are still
+ * delivering — so we don't recommend pausing something that's already
+ * paused. Meta's batch endpoint accepts up to 50 IDs per request.
+ */
+export async function getMetaAdStatuses(
+  adIds: string[],
+  accessToken?: string
+): Promise<
+  Record<string, { effective_status: string; configured_status: string; name: string }>
+> {
+  const ids = adIds.filter((id) => Boolean(id) && /^\d+$/.test(id));
+  if (ids.length === 0) return {};
+  const token = getAccessToken(accessToken);
+  const result: Record<string, any> = {};
+  const CHUNK = 50;
+  for (let i = 0; i < ids.length; i += CHUNK) {
+    const chunk = ids.slice(i, i + CHUNK);
+    const url =
+      `${GRAPH_BASE}/?` +
+      `ids=${chunk.join(',')}` +
+      `&fields=id,name,effective_status,configured_status` +
+      `&access_token=${encodeURIComponent(token)}`;
+    try {
+      const res = await axios.get(url, { timeout: 15000 });
+      Object.assign(result, res.data || {});
+    } catch (err: any) {
+      // Don't fail the whole report if one chunk errors — just log and continue.
+      console.warn(
+        '[meta-graph] getMetaAdStatuses chunk failed:',
+        err?.response?.data?.error?.message || err?.message
+      );
+    }
+  }
+  // Normalize to the documented shape (Graph sometimes returns extra fields).
+  const out: Record<string, { effective_status: string; configured_status: string; name: string }> = {};
+  for (const [id, row] of Object.entries(result)) {
+    const r = row as any;
+    out[id] = {
+      effective_status: String(r?.effective_status || 'UNKNOWN'),
+      configured_status: String(r?.configured_status || 'UNKNOWN'),
+      name: String(r?.name || ''),
+    };
+  }
+  return out;
+}
+
+/**
  * Per-ad spend breakdown for a date range.
  * Mirrors the shape Pipeboard's `getMetaSpendByAd` returned, so callers
  * downstream can keep their existing field names.

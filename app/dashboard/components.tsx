@@ -1625,21 +1625,35 @@ export function TopAdsTable(props: { ads: any[] }) {
               <th style={{ ...styles.th, textAlign: 'right' }}>CPQL</th>
               <th style={{ ...styles.th, textAlign: 'right' }}>Freq</th>
               <th style={{ ...styles.th, textAlign: 'right' }}>CPM</th>
-              <th style={styles.th}>Status</th>
+              <th style={styles.th}>Meta status</th>
+              <th style={styles.th}>Verdict</th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((a) => {
-              const rowBg =
-                a.status === 'WINNER'
-                  ? '#f0fdf4'
-                  : a.status === 'KILL'
-                  ? '#fef2f2'
-                  : a.status === 'GOOD'
-                  ? '#fdfff4'
-                  : undefined;
+              const isActive = a.is_active === true;
+              const isAlreadyOff =
+                a.effective_status &&
+                a.effective_status !== 'ACTIVE' &&
+                a.effective_status !== 'UNKNOWN';
+              // Already-paused ads get muted styling regardless of verdict.
+              const rowBg = isAlreadyOff
+                ? '#f5f5f5'
+                : a.status === 'WINNER'
+                ? '#f0fdf4'
+                : a.status === 'KILL'
+                ? '#fef2f2'
+                : a.status === 'GOOD'
+                ? '#fdfff4'
+                : undefined;
               return (
-                <tr key={a.ad_id} style={rowBg ? { background: rowBg } : undefined}>
+                <tr
+                  key={a.ad_id}
+                  style={{
+                    ...(rowBg ? { background: rowBg } : {}),
+                    ...(isAlreadyOff ? { opacity: 0.7 } : {}),
+                  }}
+                >
                   <td style={{ ...styles.td, maxWidth: 300, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={a.ad_name}>
                     {a.ad_name}
                   </td>
@@ -1653,7 +1667,15 @@ export function TopAdsTable(props: { ads: any[] }) {
                   <td style={styles.tdNum}>{fmt(a.frequency)}</td>
                   <td style={styles.tdNum}>₹{fmt(a.cpm)}</td>
                   <td style={styles.td}>
-                    <StatusBadge status={a.status} />
+                    <MetaStatusBadge value={a.effective_status} isActive={isActive} />
+                  </td>
+                  <td style={styles.td}>
+                    {isAlreadyOff && (a.status === 'KILL' || a.status === 'MONITOR') ? (
+                      // Already off — don't suggest killing.
+                      <span style={{ ...styles.badge, ...styles.neutral }}>ALREADY OFF</span>
+                    ) : (
+                      <StatusBadge status={a.status} />
+                    )}
                   </td>
                 </tr>
               );
@@ -1863,6 +1885,39 @@ function StatusBadge({ status }: { status: string }) {
   };
   const s = map[status] || map.NO_LEADS;
   return <span style={{ ...styles.badge, ...s }}>{status.replace('_', ' ')}</span>;
+}
+
+/**
+ * Meta Ads delivery status pulled from Graph API (effective_status). Lets the
+ * dashboard distinguish "still running" from "already paused" so kill-candidate
+ * recommendations don't waste effort on ads that are off.
+ */
+function MetaStatusBadge({ value, isActive }: { value?: string; isActive?: boolean }) {
+  if (!value || value === 'UNKNOWN') {
+    return <span style={{ ...styles.badge, ...styles.neutral }}>—</span>;
+  }
+  const palette: Record<string, React.CSSProperties> = {
+    ACTIVE: { background: '#dcfce7', color: '#15803d' },
+    PAUSED: { background: '#f5f5f5', color: '#444' },
+    CAMPAIGN_PAUSED: { background: '#f5f5f5', color: '#444' },
+    ADSET_PAUSED: { background: '#f5f5f5', color: '#444' },
+    DELETED: { background: '#fee2e2', color: '#b91c1c' },
+    ARCHIVED: { background: '#f5f5f5', color: '#666' },
+    DISAPPROVED: { background: '#fee2e2', color: '#b91c1c' },
+    PENDING_REVIEW: { background: '#fef3c7', color: '#92400e' },
+    WITH_ISSUES: { background: '#fef3c7', color: '#92400e' },
+    IN_PROCESS: { background: '#e0f2fe', color: '#0369a1' },
+  };
+  const s = palette[value] || styles.neutral;
+  // Tighter label for the long parent-pause statuses.
+  const label =
+    value === 'CAMPAIGN_PAUSED'
+      ? 'PAUSED (camp.)'
+      : value === 'ADSET_PAUSED'
+      ? 'PAUSED (adset)'
+      : value.replace(/_/g, ' ');
+  void isActive;
+  return <span style={{ ...styles.badge, ...s }}>{label}</span>;
 }
 
 function Section(props: { title: string; children: React.ReactNode }) {

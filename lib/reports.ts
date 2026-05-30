@@ -25,6 +25,7 @@ import { getGoogleAdsCampaignMetricsDirect as getGoogleAdsCampaignMetrics } from
 import {
   getMetaSpendByAdDirect as getMetaSpendByAd,
   getMetaDailyAccount,
+  getMetaAdStatuses,
   type MetaGraphInsightRow as MetaInsightRow,
 } from './meta-graph';
 import { generateMarketingInsight } from './gemini';
@@ -127,6 +128,13 @@ export interface VolumeReport {
     frequency: number;
     cpm: number;
     status: string;
+    /** Meta's effective_status — true delivery state (accounts for parent-level
+     *  pauses). ACTIVE means the ad is currently running. */
+    effective_status?: string;
+    /** Meta's configured_status — ad-level setting only (ignores parent pauses). */
+    configured_status?: string;
+    /** Convenience: true iff effective_status === 'ACTIVE'. */
+    is_active?: boolean;
   }>;
   google_ads: {
     spend: number;
@@ -534,7 +542,7 @@ export async function buildVolumeReport(
     .sort((a, b) => b.spend - a.spend);
 
   // Top ads (by lead volume) with status
-  const top_ads = Array.from(adRollup.values())
+  const top_ads_partial = Array.from(adRollup.values())
     .map((a) => {
       const qual_rate = a.leads > 0 ? +((a.qualified / a.leads) * 100).toFixed(2) : 0;
       const good_rate = a.leads > 0 ? +((a.good / a.leads) * 100).toFixed(2) : 0;
@@ -557,6 +565,30 @@ export async function buildVolumeReport(
     })
     .sort((a, b) => b.leads - a.leads)
     .slice(0, 30);
+
+  // Enrich with Meta's actual effective_status so we can flag already-paused
+  // ads (and so kill-candidate recommendations don't waste effort on ads that
+  // are no longer delivering). Failure here is non-fatal — the field is
+  // optional in the report response.
+  const adIdsForStatus = top_ads_partial.map((a) => a.ad_id).filter(Boolean);
+  let adStatuses: Awaited<ReturnType<typeof getMetaAdStatuses>> = {};
+  if (adIdsForStatus.length > 0) {
+    try {
+      adStatuses = await getMetaAdStatuses(adIdsForStatus, metaAccessToken);
+    } catch (e: any) {
+      console.warn('[reports] getMetaAdStatuses failed:', e?.message);
+    }
+  }
+  const top_ads = top_ads_partial.map((a) => {
+    const meta = adStatuses[a.ad_id];
+    const effective_status = meta?.effective_status;
+    return {
+      ...a,
+      effective_status,
+      configured_status: meta?.configured_status,
+      is_active: effective_status === 'ACTIVE',
+    };
+  });
 
   // Google
   const googleSpend = googleRows.reduce((s, r) => s + (Number(r.cost) || 0), 0);
