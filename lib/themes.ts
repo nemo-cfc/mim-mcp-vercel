@@ -1,31 +1,28 @@
 /**
  * Theme classifier — maps Meta ad names to creative themes.
  *
- * The themes here mirror the recurring creative buckets we use in analyses:
- *   GMAT Waiver / Profile Building / School Review / Case Study /
- *   Degree Selection / School Selection / Hook / Other.
+ * Per marketing — GMAT Waiver, Degree Selection, and Profile Building all
+ * fall under the same creative bucket (Profile Building). The recurring
+ * themes are:
+ *   Profile Building / School Review / Case Study / School Selection /
+ *   Hook / Country-Geography / Other.
  *
- * Classification is name-based (case-insensitive substring matching), so an
- * ad like "Gmat Waiver Akshay Daikat Hook - Copy 2" sorts into GMAT Waiver.
+ * Classification is name-based (case-insensitive substring matching).
  */
 
 export type ThemeName =
-  | 'GMAT Waiver'
   | 'Profile Building'
   | 'School Review'
   | 'Case Study'
-  | 'Degree Selection'
   | 'School Selection'
   | 'Hook / Pattern Interrupt'
   | 'Country / Geography'
   | 'Other';
 
 export const ALL_THEMES: ThemeName[] = [
-  'GMAT Waiver',
   'Profile Building',
   'School Review',
   'Case Study',
-  'Degree Selection',
   'School Selection',
   'Hook / Pattern Interrupt',
   'Country / Geography',
@@ -37,17 +34,24 @@ export function classifyTheme(adName: string | undefined | null): ThemeName {
   if (!name || name === '(unknown ad)' || name.includes('unknown')) return 'Other';
 
   // Order matters — more specific patterns first.
-  if (name.includes('gmat waiver') || (name.includes('gmat') && name.includes('akshay')))
-    return 'GMAT Waiver';
-  if (name.includes('why gmat alone')) return 'GMAT Waiver';
 
+  // ── Profile Building bucket (includes GMAT Waiver + Degree Selection) ──
   if (
     name.includes('profile building') ||
     name.includes('profile-building') ||
-    name.includes('interstellar')
+    name.includes('interstellar') ||
+    name.includes('gmat waiver') ||
+    name.includes('why gmat alone') ||
+    (name.includes('gmat') && name.includes('akshay')) ||
+    name.includes('degree selection') ||
+    name.includes('mim or mfin') ||
+    name.includes('mim, or mfin') ||
+    name.includes('mba, mim') ||
+    name.includes('mba or mim')
   )
     return 'Profile Building';
 
+  // ── School Review (HEC / INSEAD / Oxford / etc. school-specific) ──
   if (
     name.includes('school review') ||
     name.includes('school-review') ||
@@ -56,7 +60,7 @@ export function classifyTheme(adName: string | undefined | null): ThemeName {
     name.includes('oxford') ||
     name.includes('school selection')
   ) {
-    // 'Oxford SAID' tends to be more of a hook / pattern test — split it out.
+    // 'Oxford SAID' is a hook / pattern test, not a school review.
     if (name.includes('oxford said') || name.includes('four hands'))
       return 'Hook / Pattern Interrupt';
     if (name.includes('school selection') || name.includes('school-selection'))
@@ -64,6 +68,7 @@ export function classifyTheme(adName: string | undefined | null): ThemeName {
     return 'School Review';
   }
 
+  // ── Case Study ──
   if (
     name.includes('case study') ||
     name.includes('case-study') ||
@@ -73,9 +78,7 @@ export function classifyTheme(adName: string | undefined | null): ThemeName {
   )
     return 'Case Study';
 
-  if (name.includes('degree selection') || name.includes('mim or mfin'))
-    return 'Degree Selection';
-
+  // ── Hook / Pattern Interrupt ──
   if (
     name.includes('joker') ||
     name.includes('karwadenge') ||
@@ -83,9 +86,10 @@ export function classifyTheme(adName: string | undefined | null): ThemeName {
   )
     return 'Hook / Pattern Interrupt';
 
+  // ── Country / Geography ──
   if (
     name.includes('country') ||
-    name.includes('don') /* "Don't Pick Your MBA Country..." */ ||
+    name.includes("don'") /* "Don't Pick Your MBA Country..." */ ||
     name.includes('geography')
   )
     return 'Country / Geography';
