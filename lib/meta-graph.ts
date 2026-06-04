@@ -219,6 +219,94 @@ export async function getMetaSpendByAdDirect(
 }
 
 /**
+ * Per-ad spend with an hourly breakdown for a single date. Used by the
+ * Themes panel to detect which ads spent money in the last N hours
+ * (proxy for "actively delivering right now").
+ *
+ * Returns one row per (ad_id, hour_bin). The `hour` field is 0-23.
+ *
+ * Meta API:
+ *   breakdowns=hourly_stats_aggregated_by_advertiser_time_zone
+ *   returns a string like "00:00:00 - 00:59:59" — we parse the leading
+ *   hour into an integer.
+ */
+export async function getMetaAdsHourlySpend(opts: {
+  date: string; // YYYY-MM-DD (account timezone)
+  access_token?: string;
+  account_id?: string;
+}): Promise<
+  Array<{
+    ad_id: string;
+    ad_name: string;
+    campaign_id: string;
+    campaign_name: string;
+    hour: number;
+    spend: number;
+    impressions: number;
+  }>
+> {
+  const accountId = opts.account_id || process.env.META_AD_ACCOUNT_ID || 'act_509761434701737';
+  const token = getAccessToken(opts.access_token);
+  const fields = [
+    'ad_id',
+    'ad_name',
+    'campaign_id',
+    'campaign_name',
+    'spend',
+    'impressions',
+  ].join(',');
+
+  let url: string | null =
+    `${GRAPH_BASE}/${accountId}/insights?` +
+    `access_token=${encodeURIComponent(token)}` +
+    `&time_range=${encodeURIComponent(JSON.stringify({ since: opts.date, until: opts.date }))}` +
+    `&level=ad` +
+    `&breakdowns=hourly_stats_aggregated_by_advertiser_time_zone` +
+    `&fields=${fields}` +
+    `&limit=500`;
+
+  const rows: Array<{
+    ad_id: string;
+    ad_name: string;
+    campaign_id: string;
+    campaign_name: string;
+    hour: number;
+    spend: number;
+    impressions: number;
+  }> = [];
+  let safety = 50;
+  while (url && safety-- > 0) {
+    let res;
+    try {
+      res = await axios.get(url, { timeout: 30000 });
+    } catch (err: any) {
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.error?.message || err?.message;
+      throw new Error(`Meta Graph API ${status || ''} (hourly): ${detail}`);
+    }
+    const data: any[] = res.data?.data || [];
+    for (const r of data) {
+      // hourly_stats_aggregated_by_advertiser_time_zone looks like "00:00:00 - 00:59:59"
+      const hourRaw = String(r.hourly_stats_aggregated_by_advertiser_time_zone || '');
+      const m = hourRaw.match(/^(\d{2}):/);
+      const hour = m ? parseInt(m[1], 10) : NaN;
+      if (!Number.isFinite(hour)) continue;
+      rows.push({
+        ad_id: String(r.ad_id || ''),
+        ad_name: String(r.ad_name || ''),
+        campaign_id: String(r.campaign_id || ''),
+        campaign_name: String(r.campaign_name || ''),
+        hour,
+        spend: Number(r.spend || 0),
+        impressions: Number(r.impressions || 0),
+      });
+    }
+    url = res.data?.paging?.next || null;
+  }
+  return rows;
+}
+
+/**
  * Account-level daily breakdown — mirrors what reports.ts uses for the
  * daily-trend chart and decay metrics.
  */

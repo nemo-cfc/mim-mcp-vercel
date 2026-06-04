@@ -12,6 +12,7 @@ import { filterLeads, buildChannelMatrix, buildDashboard, type DateField } from 
 import { buildVolumeReport, buildQualityReport } from '@/lib/reports';
 import { getMetaSpendByAdDirect as getMetaSpendByAd } from '@/lib/meta-graph';
 import { getGoogleAdsTotalSpendDirect as getGoogleAdsTotalSpend } from '@/lib/google-ads';
+import { buildThemesPanel } from '@/lib/themes-report';
 
 export const maxDuration = 60;
 export const dynamic = 'force-dynamic';
@@ -261,6 +262,32 @@ const handler = createMcpHandler(
           date_range: { from, to },
           total_spend: +total.toFixed(2),
         });
+      }
+    );
+
+    // =============================================================================
+    // Themes panel — active vs inactive ads per theme based on recent spend
+    // =============================================================================
+    server.tool(
+      'get_themes_breakdown',
+      'Breakdown of Meta ads by creative theme (GMAT Waiver / Profile Building / School Review / Case Study / Degree Selection / Hook / etc.) with active vs inactive counts based on the last N hours of spend. Defaults to a 4-hour window in IST. Pass `date=YYYY-MM-DD` to query a historical day. Returns per-theme spend share, active/inactive ad lists, and effective_status for the paused ads.',
+      {
+        hours: z
+          .number()
+          .int()
+          .min(1)
+          .max(24)
+          .optional()
+          .default(4)
+          .describe('Lookback window size in hours (1-24, default 4)'),
+        date: z
+          .string()
+          .optional()
+          .describe('YYYY-MM-DD in account timezone (default: today in IST)'),
+      },
+      async ({ hours, date }) => {
+        const panel = await buildThemesPanel({ hours, date });
+        return jsonText(panel);
       }
     );
 

@@ -7,6 +7,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUser } from '@/lib/web-auth';
 import { buildVolumeReport } from '@/lib/reports';
+import { TopNav } from './nav';
 import {
   DateControls,
   SummaryCards,
@@ -94,6 +95,7 @@ export default async function DashboardPage(props: {
       }}
     >
       <div style={{ maxWidth: 1200, margin: '0 auto' }}>
+        <TopNav current="dashboard" userEmail={user.email} isAdmin={user.role === 'admin'} />
         <header
           style={{
             display: 'flex',
