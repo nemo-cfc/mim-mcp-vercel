@@ -1,11 +1,13 @@
 /**
  * Theme classifier — maps Meta ad names to creative themes.
  *
- * Per marketing — GMAT Waiver, Degree Selection, and Profile Building all
- * fall under the same creative bucket (Profile Building). The recurring
- * themes are:
- *   Profile Building / School Review / Case Study / School Selection /
- *   Hook / Country-Geography / Other.
+ * Per marketing — the recurring buckets are:
+ *   Profile Building (includes GMAT Waiver, Degree Selection, MBA Country)
+ *   School Review (includes Oxford SAID / four hands)
+ *   Case Study
+ *   School Selection
+ *   Anti CPA (Karwadenge / Joker / Hook patterns)
+ *   Other
  *
  * Classification is name-based (case-insensitive substring matching).
  */
@@ -15,8 +17,7 @@ export type ThemeName =
   | 'School Review'
   | 'Case Study'
   | 'School Selection'
-  | 'Hook / Pattern Interrupt'
-  | 'Country / Geography'
+  | 'Anti CPA'
   | 'Other';
 
 export const ALL_THEMES: ThemeName[] = [
@@ -24,8 +25,7 @@ export const ALL_THEMES: ThemeName[] = [
   'School Review',
   'Case Study',
   'School Selection',
-  'Hook / Pattern Interrupt',
-  'Country / Geography',
+  'Anti CPA',
   'Other',
 ];
 
@@ -35,38 +35,35 @@ export function classifyTheme(adName: string | undefined | null): ThemeName {
 
   // Order matters — more specific patterns first.
 
-  // ── Profile Building bucket (includes GMAT Waiver + Degree Selection) ──
-  if (
-    name.includes('profile building') ||
-    name.includes('profile-building') ||
-    name.includes('interstellar') ||
-    name.includes('gmat waiver') ||
-    name.includes('why gmat alone') ||
-    (name.includes('gmat') && name.includes('akshay')) ||
-    name.includes('degree selection') ||
-    name.includes('mim or mfin') ||
-    name.includes('mim, or mfin') ||
-    name.includes('mba, mim') ||
-    name.includes('mba or mim')
-  )
-    return 'Profile Building';
-
-  // ── School Review (HEC / INSEAD / Oxford / etc. school-specific) ──
+  // ── School Review (school-specific, includes Oxford SAID / four hands) ──
   if (
     name.includes('school review') ||
     name.includes('school-review') ||
     name.includes('hec') ||
     name.includes('insead') ||
     name.includes('oxford') ||
-    name.includes('school selection')
+    name.includes('four hands') ||
+    name.includes('said')
   ) {
-    // 'Oxford SAID' is a hook / pattern test, not a school review.
-    if (name.includes('oxford said') || name.includes('four hands'))
-      return 'Hook / Pattern Interrupt';
     if (name.includes('school selection') || name.includes('school-selection'))
       return 'School Selection';
     return 'School Review';
   }
+
+  // ── School Selection ──
+  if (name.includes('school selection') || name.includes('school-selection'))
+    return 'School Selection';
+
+  // ── Anti CPA (Karwadenge / Joker / Hook patterns) ──
+  if (
+    name.includes('joker') ||
+    name.includes('karwadenge') ||
+    name.includes('anti cpa') ||
+    name.includes('anti-cpa') ||
+    name.includes('anticpa') ||
+    name.includes('hook')
+  )
+    return 'Anti CPA';
 
   // ── Case Study ──
   if (
@@ -78,21 +75,24 @@ export function classifyTheme(adName: string | undefined | null): ThemeName {
   )
     return 'Case Study';
 
-  // ── Hook / Pattern Interrupt ──
+  // ── Profile Building (includes GMAT Waiver, Degree Selection, MBA Country) ──
   if (
-    name.includes('joker') ||
-    name.includes('karwadenge') ||
-    name.includes('hook')
-  )
-    return 'Hook / Pattern Interrupt';
-
-  // ── Country / Geography ──
-  if (
+    name.includes('profile building') ||
+    name.includes('profile-building') ||
+    name.includes('interstellar') ||
+    name.includes('gmat waiver') ||
+    name.includes('why gmat alone') ||
+    (name.includes('gmat') && name.includes('akshay')) ||
+    name.includes('degree selection') ||
+    name.includes('mim or mfin') ||
+    name.includes('mim, or mfin') ||
+    name.includes('mba, mim') ||
+    name.includes('mba or mim') ||
     name.includes('country') ||
     name.includes("don'") /* "Don't Pick Your MBA Country..." */ ||
     name.includes('geography')
   )
-    return 'Country / Geography';
+    return 'Profile Building';
 
   return 'Other';
 }

@@ -582,8 +582,17 @@ export async function buildVolumeReport(
   const top_ads = top_ads_partial.map((a) => {
     const meta = adStatuses[a.ad_id];
     const effective_status = meta?.effective_status;
+    // If we labelled an ad "(unknown ad)" earlier (CRM saw the aid but Meta's
+    // insights call didn't return it — usually because the ad was paused/
+    // archived/deleted), use the name Meta returned from the batch status
+    // call instead so we surface the actual creative name.
+    const resolvedName =
+      (a.ad_name === '(unknown ad)' || a.ad_name === '(unnamed)') && meta?.name
+        ? meta.name
+        : a.ad_name;
     return {
       ...a,
+      ad_name: resolvedName,
       effective_status,
       configured_status: meta?.configured_status,
       is_active: effective_status === 'ACTIVE',
