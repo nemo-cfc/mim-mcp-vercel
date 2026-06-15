@@ -5,7 +5,7 @@
 import Link from 'next/link';
 
 interface Props {
-  current: 'dashboard' | 'themes';
+  current: 'dashboard' | 'themes' | 'qualified-by-ad';
   userEmail?: string;
   isAdmin?: boolean;
 }
@@ -29,6 +29,9 @@ export function TopNav(props: Props) {
       </NavLink>
       <NavLink href="/dashboard/themes" active={props.current === 'themes'}>
         Themes
+      </NavLink>
+      <NavLink href="/dashboard/qualified-by-ad" active={props.current === 'qualified-by-ad'}>
+        Qualified by Ad
       </NavLink>
       <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
         {props.userEmail && (

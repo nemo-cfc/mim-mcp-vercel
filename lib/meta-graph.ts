@@ -323,3 +323,163 @@ export async function getMetaDailyAccount(
     access_token: metaAccessToken,
   });
 }
+
+// ============================================================================
+// AD PREVIEW URLS — used by /dashboard/qualified-by-ad
+// ============================================================================
+//
+// For each ad we expose a "View ad" link in the dashboard. Three sources, in
+// order of preference:
+//   1. creative.permalink_url — stable Facebook /reel/<vid>/ or /post/<id>
+//      URL that doesn't expire. This is what we cache.
+//   2. creative.object_story_id — fallback when permalink isn't available
+//      (e.g. for created-via-API ads). Format: "{page_id}_{post_id}"
+//   3. Meta Ads Library URL — last resort, only works for currently-running
+//      ads. Format: facebook.com/ads/library/?id={ad_id}
+//
+// Cache key: `mim:preview:{ad_id}`. TTL 7 days (these don't expire often;
+// the refresh-preview API route lets the UI force-invalidate per ad).
+//
+
+import { redis } from './redis';
+
+export interface AdPreviewInfo {
+  ad_id: string;
+  ad_name: string;
+  permalink_url: string;
+  thumbnail_url: string;
+  fetched_at: string;
+  cached: boolean;
+}
+
+const PREVIEW_TTL_SECONDS = 7 * 24 * 3600; // 7 days
+
+export async function getMetaAdPreviewUrls(
+  ad_ids: string[],
+  opts?: { access_token?: string; force_refresh?: boolean }
+): Promise<Record<string, AdPreviewInfo>> {
+  if (!ad_ids.length) return {};
+  const token = getAccessToken(opts?.access_token);
+  const force = opts?.force_refresh ?? false;
+
+  const result: Record<string, AdPreviewInfo> = {};
+  const toFetch: string[] = [];
+
+  // 1. Try cache
+  if (!force) {
+    const cacheKeys = ad_ids.map((id) => `mim:preview:${id}`);
+    const cached = await redis.mget<AdPreviewInfo[]>(...cacheKeys);
+    for (let i = 0; i < ad_ids.length; i++) {
+      const aid = ad_ids[i];
+      const c = cached?.[i];
+      if (c && c.permalink_url) {
+        result[aid] = { ...c, cached: true };
+      } else {
+        toFetch.push(aid);
+      }
+    }
+  } else {
+    toFetch.push(...ad_ids);
+  }
+
+  if (!toFetch.length) return result;
+
+  // 2. Batch fetch via Graph batch API (up to 50 per call)
+  for (let i = 0; i < toFetch.length; i += 50) {
+    const chunk = toFetch.slice(i, i + 50);
+    const batch = chunk.map((aid) => ({
+      method: 'GET',
+      relative_url: `${aid}?fields=name,creative{permalink_url,object_story_id,thumbnail_url}`,
+    }));
+    try {
+      const res = await axios.post(
+        `${GRAPH_BASE}/`,
+        new URLSearchParams({
+          access_token: token,
+          batch: JSON.stringify(batch),
+        }).toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
+      );
+      const responses: any[] = res.data || [];
+      const pipeline = redis.pipeline();
+      let pipelineDirty = false;
+      for (let j = 0; j < chunk.length; j++) {
+        const aid = chunk[j];
+        const r = responses[j];
+        if (!r || r.code !== 200) {
+          // Couldn't fetch this ad — fall back to ads library URL
+          const fallback: AdPreviewInfo = {
+            ad_id: aid,
+            ad_name: '',
+            permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
+            thumbnail_url: '',
+            fetched_at: new Date().toISOString(),
+            cached: false,
+          };
+          result[aid] = fallback;
+          continue;
+        }
+        try {
+          const body = JSON.parse(r.body);
+          const permalink: string = body?.creative?.permalink_url || '';
+          const storyId: string = body?.creative?.object_story_id || '';
+          let url = '';
+          if (permalink) {
+            url = permalink.startsWith('http') ? permalink : `https://www.facebook.com${permalink}`;
+          } else if (storyId && storyId.includes('_')) {
+            const [pageId, postId] = storyId.split('_');
+            url = `https://www.facebook.com/${pageId}/posts/${postId}`;
+          } else {
+            url = `https://www.facebook.com/ads/library/?id=${aid}`;
+          }
+          const entry: AdPreviewInfo = {
+            ad_id: aid,
+            ad_name: body?.name || '',
+            permalink_url: url,
+            thumbnail_url: body?.creative?.thumbnail_url || '',
+            fetched_at: new Date().toISOString(),
+            cached: false,
+          };
+          pipeline.set(`mim:preview:${aid}`, entry, { ex: PREVIEW_TTL_SECONDS });
+          pipelineDirty = true;
+          result[aid] = entry;
+        } catch {
+          result[aid] = {
+            ad_id: aid,
+            ad_name: '',
+            permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
+            thumbnail_url: '',
+            fetched_at: new Date().toISOString(),
+            cached: false,
+          };
+        }
+      }
+      if (pipelineDirty) {
+        await pipeline.exec();
+      }
+    } catch (err: any) {
+      // On batch failure, just return ad-library fallback URLs for the chunk
+      for (const aid of chunk) {
+        result[aid] = {
+          ad_id: aid,
+          ad_name: '',
+          permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
+          thumbnail_url: '',
+          fetched_at: new Date().toISOString(),
+          cached: false,
+        };
+      }
+      console.error('[meta-graph] preview batch failed:', err?.message || err);
+    }
+  }
+
+  return result;
+}
+
+export async function invalidateAdPreviewCache(ad_id: string): Promise<void> {
+  try {
+    await redis.del(`mim:preview:${ad_id}`);
+  } catch (err) {
+    console.error('[meta-graph] invalidateAdPreviewCache failed:', err);
+  }
+}
