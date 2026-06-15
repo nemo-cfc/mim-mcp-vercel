@@ -367,6 +367,10 @@ export interface AdPreviewInfo {
 
 // Slowly-changing metadata (name/thumb/permalink/video_id) — 7 days.
 const PREVIEW_TTL_SECONDS = 7 * 24 * 3600;
+// Failed / empty-name lookups — cache only briefly so retries happen often.
+// Without this short TTL, a one-off Meta hiccup would leave a row nameless
+// for 7 days.
+const PREVIEW_ERROR_TTL_SECONDS = 5 * 60;
 // Signed FBCDN URL — expires fast (typically 6-24h). Cache 30 min to absorb
 // burst loads but stay well within signature validity.
 const CDN_URL_TTL_SECONDS = 30 * 60;
@@ -475,8 +479,18 @@ export async function getMetaAdPreviewUrls(
     for (let i = 0; i < ad_ids.length; i++) {
       const aid = ad_ids[i];
       const c = cached?.[i];
-      if (c && c.ad_id) {
-        meta[aid] = { ...c, cached: true };
+      // Only treat as a HIT if we got a usable result. An empty ad_name or
+      // an error/unknown entity_kind means the prior fetch was incomplete —
+      // retry rather than perpetuate the gap.
+      const isGoodHit =
+        c &&
+        c.ad_id &&
+        c.ad_name &&
+        c.ad_name.length > 0 &&
+        c.entity_kind !== 'error' &&
+        c.entity_kind !== 'unknown';
+      if (isGoodHit) {
+        meta[aid] = { ...c!, cached: true };
       } else {
         toFetch.push(aid);
       }
@@ -579,7 +593,10 @@ export async function getMetaAdPreviewUrls(
             error: name ? '' : 'meta returned ad but no name (unusual)',
             fetched_at: new Date().toISOString(),
           };
-          pipeline.set(`mim:preview:${aid}`, entry, { ex: PREVIEW_TTL_SECONDS });
+          // Short TTL when we got nothing useful (no name) — retry within 5min
+          // instead of stale-empty for a week.
+          const ttl = name ? PREVIEW_TTL_SECONDS : PREVIEW_ERROR_TTL_SECONDS;
+          pipeline.set(`mim:preview:${aid}`, entry, { ex: ttl });
           pipelineDirty = true;
           meta[aid] = { ...entry, cached: false };
         } catch (parseErr: any) {
@@ -625,6 +642,9 @@ export async function getMetaAdPreviewUrls(
 }
 
 function makeErrorMeta(aid: string, err: string): CachedPreviewMeta & { cached: boolean } {
+  // NOTE: We intentionally do NOT cache error entries — let the next page
+  // load retry. The 5-min PREVIEW_ERROR_TTL_SECONDS only applies to the
+  // "ad with empty name" case (where Meta technically succeeded).
   return {
     ad_id: aid,
     ad_name: '',

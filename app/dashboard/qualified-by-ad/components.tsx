@@ -203,7 +203,14 @@ function AdRow(props: { row: any; stages: string[] }) {
   }
 
   const isMeta = props.row.is_meta;
-  const displayName = adName || props.row.ad_name || (isMeta ? `(ad ${props.row.ad_id})` : props.row.ad_name);
+  // Resolution order for the displayed name:
+  //   1. Meta API ad_name (the actual ad name in Meta Ads Manager) — best
+  //   2. Empty + "(ad <id>)" placeholder so the gap is obvious
+  // We intentionally DO NOT fall back to crm_creative_name here — that field
+  // is the utm_source segment ("meta_mim"), which would mask the gap with a
+  // misleading value. crm_creative_name is shown as a small secondary line.
+  const metaName = (adName || props.row.ad_name || '').trim();
+  const displayName = metaName || (isMeta ? `(ad ${props.row.ad_id})` : props.row.ad_name);
   // Prefer the direct FBCDN video URL; fall back to permalink for image ads
   // or when the CDN URL hasn't been resolved.
   const linkUrl = cdnUrl || permalinkUrl;
@@ -339,6 +346,11 @@ function AdRow(props: { row: any; stages: string[] }) {
             )}
             {isMeta && cached && <> · <span style={{ color: '#aaa' }}>cached</span></>}
           </div>
+          {isMeta && !metaName && props.row.crm_creative_name && (
+            <div style={{ fontSize: 10, color: '#888', marginTop: 2 }}>
+              CRM hint: <code>{props.row.crm_creative_name}</code>
+            </div>
+          )}
           {props.row.entity_kind === 'error' && props.row.meta_error && (
             <div style={{ fontSize: 10, color: '#b42318', marginTop: 2, fontStyle: 'italic' }}>
               {props.row.meta_error}

@@ -119,6 +119,10 @@ export interface QualifiedByAdRow {
   /** For non-Meta rows, the sub-source (utm_content / utm_campaign / landing
    *  page) that this row groups. Empty for Meta rows. */
   sub_source: string;
+  /** The CRM-side creative_name (extracted from analytics_source / utm_content).
+   *  Often "meta_mim" or similar utm_source value — used only as a low-priority
+   *  diagnostic, NEVER as the displayed ad name. */
+  crm_creative_name: string;
   is_meta: boolean;
   total_qualified: number;
   /** Stage label → count (only columns in QUALIFIED_STAGE_COLUMNS). */
@@ -183,6 +187,7 @@ export async function buildQualifiedByAdReport(opts: {
     entity_kind: '',
     meta_error: '',
     sub_source: '',
+    crm_creative_name: '',
     is_meta: false,
     total_qualified: 0,
     stages: {},
@@ -203,7 +208,12 @@ export async function buildQualifiedByAdReport(opts: {
       if (!row) {
         row = {
           ad_id: aid,
-          ad_name: l.creative_name || `(ad ${aid})`,
+          // Intentionally EMPTY — do not seed with l.creative_name. The CRM
+          // creative_name is the utm_source pipe-segment ("meta_mim"), not the
+          // ad's real name. The Meta API lookup populates this; if it fails,
+          // the UI renders "(ad <id>)" so the gap is obvious instead of hidden
+          // behind a misleading "meta_mim" label.
+          ad_name: '',
           channel: l.channel,
           cdn_url: '',
           preview_url: '',
@@ -213,6 +223,7 @@ export async function buildQualifiedByAdReport(opts: {
           entity_kind: '',
           meta_error: '',
           sub_source: '',
+          crm_creative_name: l.creative_name || '',
           is_meta: true,
           total_qualified: 0,
           stages: {},
@@ -244,6 +255,7 @@ export async function buildQualifiedByAdReport(opts: {
           entity_kind: '',
           meta_error: '',
           sub_source: subSource,
+          crm_creative_name: '',
           is_meta: false,
           total_qualified: 0,
           stages: {},
