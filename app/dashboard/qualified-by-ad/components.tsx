@@ -145,7 +145,8 @@ export function QualifiedByAdTable(props: { data: any }) {
       <table style={{ borderCollapse: 'collapse', width: '100%', fontSize: 13 }}>
         <thead>
           <tr style={{ background: '#fafafa', position: 'sticky', top: 0, zIndex: 1 }}>
-            <th style={th('left', 320, true)}>Ad / Source</th>
+            <th style={th('center', 80, true)}>Preview</th>
+            <th style={th('left', 300)}>Ad / Source</th>
             <th style={th('right', 70)}>Total</th>
             {stages.map((s: string) => (
               <th key={s} style={th('right', 92)}>
@@ -157,7 +158,7 @@ export function QualifiedByAdTable(props: { data: any }) {
         <tbody>
           {rows.length === 0 && (
             <tr>
-              <td colSpan={stages.length + 2} style={{ ...td(), color: '#888', fontStyle: 'italic', textAlign: 'center', padding: 24 }}>
+              <td colSpan={stages.length + 3} style={{ ...td(), color: '#888', fontStyle: 'italic', textAlign: 'center', padding: 24 }}>
                 No qualified leads in the selected window.
               </td>
             </tr>
@@ -174,6 +175,8 @@ export function QualifiedByAdTable(props: { data: any }) {
 function AdRow(props: { row: any; stages: string[] }) {
   const [refreshing, setRefreshing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState(props.row.preview_url);
+  const [thumbnailUrl, setThumbnailUrl] = useState(props.row.thumbnail_url);
+  const [adName, setAdName] = useState(props.row.ad_name);
   const [cached, setCached] = useState(props.row.preview_cached);
 
   async function refreshOne() {
@@ -186,10 +189,10 @@ function AdRow(props: { row: any; stages: string[] }) {
         body: JSON.stringify({ ad_id: props.row.ad_id }),
       });
       const j = await res.json();
-      if (j.permalink_url) {
-        setPreviewUrl(j.permalink_url);
-        setCached(false);
-      }
+      if (j.permalink_url) setPreviewUrl(j.permalink_url);
+      if (j.thumbnail_url) setThumbnailUrl(j.thumbnail_url);
+      if (j.ad_name) setAdName(j.ad_name);
+      setCached(false);
     } catch (err) {
       console.error(err);
     } finally {
@@ -198,10 +201,80 @@ function AdRow(props: { row: any; stages: string[] }) {
   }
 
   const isMeta = props.row.is_meta;
+  const displayName = adName || props.row.ad_name || (isMeta ? `(ad ${props.row.ad_id})` : props.row.ad_name);
 
   return (
     <tr style={{ borderTop: '1px solid #eee' }}>
-      <td style={td('left', 320, true)}>
+      {/* Preview thumbnail column */}
+      <td style={td('center', 80, true)}>
+        {isMeta && thumbnailUrl ? (
+          <a
+            href={previewUrl || '#'}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={`Open ad preview: ${displayName}`}
+            style={{ display: 'inline-block', lineHeight: 0 }}
+          >
+            <img
+              src={thumbnailUrl}
+              alt={displayName}
+              loading="lazy"
+              width={60}
+              height={60}
+              style={{
+                width: 60,
+                height: 60,
+                objectFit: 'cover',
+                borderRadius: 6,
+                border: '1px solid #e6e6e6',
+                background: '#f5f5f5',
+              }}
+              onError={(e) => {
+                (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+              }}
+            />
+          </a>
+        ) : isMeta ? (
+          <div
+            style={{
+              width: 60,
+              height: 60,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 6,
+              border: '1px dashed #ddd',
+              background: '#fafafa',
+              color: '#bbb',
+              fontSize: 18,
+            }}
+            title="No thumbnail available — click 🔄 to fetch"
+          >
+            ?
+          </div>
+        ) : (
+          <div
+            style={{
+              width: 60,
+              height: 60,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              borderRadius: 6,
+              background: '#f5f5f5',
+              color: '#999',
+              fontSize: 10,
+              padding: 4,
+              textAlign: 'center',
+            }}
+          >
+            {props.row.channel?.split(' ')[0] || '—'}
+          </div>
+        )}
+      </td>
+
+      {/* Ad name + meta column */}
+      <td style={td('left', 300)}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {isMeta && previewUrl ? (
@@ -218,18 +291,18 @@ function AdRow(props: { row: any; stages: string[] }) {
                 }}
                 title={previewUrl}
               >
-                {props.row.ad_name || `(ad ${props.row.ad_id})`}
+                {displayName}
               </a>
             ) : (
               <span style={{ flex: 1, fontWeight: isMeta ? 600 : 500, color: isMeta ? '#111' : '#666' }}>
-                {props.row.ad_name}
+                {displayName}
               </span>
             )}
             {isMeta && (
               <button
                 onClick={refreshOne}
                 disabled={refreshing}
-                title="Re-fetch this ad's preview URL"
+                title="Re-fetch this ad's name, thumbnail and preview URL from Meta"
                 style={{
                   padding: '2px 6px',
                   fontSize: 10,
@@ -253,7 +326,8 @@ function AdRow(props: { row: any; stages: string[] }) {
           </div>
         </div>
       </td>
-      <td style={td('right', 70, true)}>
+
+      <td style={td('right', 70)}>
         <strong>{props.row.total_qualified}</strong>
       </td>
       {props.stages.map((s: string) => {
@@ -268,7 +342,11 @@ function AdRow(props: { row: any; stages: string[] }) {
   );
 }
 
-function th(align: 'left' | 'right', width?: number, sticky?: boolean): React.CSSProperties {
+function th(
+  align: 'left' | 'right' | 'center',
+  width?: number,
+  sticky?: boolean
+): React.CSSProperties {
   return {
     textAlign: align,
     padding: '10px 12px',
@@ -283,7 +361,11 @@ function th(align: 'left' | 'right', width?: number, sticky?: boolean): React.CS
   };
 }
 
-function td(align: 'left' | 'right' = 'left', width?: number, sticky?: boolean): React.CSSProperties {
+function td(
+  align: 'left' | 'right' | 'center' = 'left',
+  width?: number,
+  sticky?: boolean
+): React.CSSProperties {
   return {
     textAlign: align,
     padding: '10px 12px',

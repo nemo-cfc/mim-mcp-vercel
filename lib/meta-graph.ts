@@ -389,7 +389,10 @@ export async function getMetaAdPreviewUrls(
     const chunk = toFetch.slice(i, i + 50);
     const batch = chunk.map((aid) => ({
       method: 'GET',
-      relative_url: `${aid}?fields=name,creative{permalink_url,object_story_id,thumbnail_url}`,
+      // Pull everything we might use as a name source and as a thumbnail source.
+      // creative.thumbnail_url is the cleanest (auto-derived). image_url / picture
+      // are fallbacks for image ads / video ads where thumbnail isn't populated.
+      relative_url: `${aid}?fields=name,creative{name,permalink_url,object_story_id,thumbnail_url,image_url,object_type,video_id}`,
     }));
     try {
       const res = await axios.post(
@@ -432,11 +435,18 @@ export async function getMetaAdPreviewUrls(
           } else {
             url = `https://www.facebook.com/ads/library/?id=${aid}`;
           }
+          // Name priority: ad.name → creative.name → empty
+          const name: string = body?.name || body?.creative?.name || '';
+          // Thumbnail priority: creative.thumbnail_url → creative.image_url → empty
+          const thumb: string =
+            body?.creative?.thumbnail_url ||
+            body?.creative?.image_url ||
+            '';
           const entry: AdPreviewInfo = {
             ad_id: aid,
-            ad_name: body?.name || '',
+            ad_name: name,
             permalink_url: url,
-            thumbnail_url: body?.creative?.thumbnail_url || '',
+            thumbnail_url: thumb,
             fetched_at: new Date().toISOString(),
             cached: false,
           };
