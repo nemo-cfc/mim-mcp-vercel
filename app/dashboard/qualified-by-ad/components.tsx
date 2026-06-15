@@ -328,9 +328,22 @@ function AdRow(props: { row: any; stages: string[] }) {
             {props.row.channel}
             {props.row.ad_id && <> · <code style={{ fontSize: 10 }}>{props.row.ad_id}</code></>}
             {isMeta && cdnUrl && <> · <span style={{ color: '#16794c' }}>fbcdn</span></>}
-            {isMeta && !cdnUrl && permalinkUrl && <> · <span style={{ color: '#888' }}>permalink</span></>}
+            {isMeta && !cdnUrl && permalinkUrl && (
+              <> · <span style={{ color: '#888' }}>permalink</span></>
+            )}
+            {props.row.entity_kind === 'campaign' && (
+              <> · <span style={{ color: '#b45309', fontWeight: 600 }}>campaign-id (pre Jun 10)</span></>
+            )}
+            {props.row.entity_kind === 'error' && (
+              <> · <span style={{ color: '#b42318' }} title={props.row.meta_error}>meta err</span></>
+            )}
             {isMeta && cached && <> · <span style={{ color: '#aaa' }}>cached</span></>}
           </div>
+          {props.row.entity_kind === 'error' && props.row.meta_error && (
+            <div style={{ fontSize: 10, color: '#b42318', marginTop: 2, fontStyle: 'italic' }}>
+              {props.row.meta_error}
+            </div>
+          )}
         </div>
       </td>
 

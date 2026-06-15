@@ -356,6 +356,11 @@ export interface AdPreviewInfo {
   /** Underlying creative.video_id, if any (used to refresh the signed cdn_url
    *  without re-resolving the ad). */
   video_id: string;
+  /** What kind of Meta entity the aid actually resolved to. Useful when
+   *  pre-Jun-10 attribution stored campaign_ids in the aid URL parameter. */
+  entity_kind: 'ad' | 'campaign' | 'adset' | 'unknown' | 'error';
+  /** Last error reason if we failed to resolve. Empty on success. */
+  error: string;
   fetched_at: string;
   cached: boolean;
 }
@@ -372,6 +377,8 @@ interface CachedPreviewMeta {
   permalink_url: string;
   thumbnail_url: string;
   video_id: string;
+  entity_kind: 'ad' | 'campaign' | 'adset' | 'unknown' | 'error';
+  error: string;
   fetched_at: string;
 }
 
@@ -478,12 +485,14 @@ export async function getMetaAdPreviewUrls(
     toFetch.push(...ad_ids);
   }
 
-  // 1. Fetch ad metadata (name, thumb, permalink, video_id) for uncached ads
+  // 1. Fetch ad metadata for uncached ids. Pre-Jun-10 some leads have
+  //    campaign_id stored in `aid`, so we request `objective` too — its
+  //    presence tells us we got a campaign back, not an ad.
   for (let i = 0; i < toFetch.length; i += 50) {
     const chunk = toFetch.slice(i, i + 50);
     const batch = chunk.map((aid) => ({
       method: 'GET',
-      relative_url: `${aid}?fields=name,creative{name,permalink_url,object_story_id,thumbnail_url,image_url,object_type,video_id}`,
+      relative_url: `${aid}?fields=name,objective,creative{name,permalink_url,object_story_id,thumbnail_url,image_url,image_hash,object_type,video_id,asset_feed_spec{videos{thumbnail_url},images{url}}}`,
     }));
     try {
       const res = await axios.post(
@@ -500,20 +509,42 @@ export async function getMetaAdPreviewUrls(
       for (let j = 0; j < chunk.length; j++) {
         const aid = chunk[j];
         const r = responses[j];
-        if (!r || r.code !== 200) {
-          meta[aid] = {
-            ad_id: aid,
-            ad_name: '',
-            permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
-            thumbnail_url: '',
-            video_id: '',
-            fetched_at: new Date().toISOString(),
-            cached: false,
-          };
+        if (!r) {
+          meta[aid] = makeErrorMeta(aid, 'no response in batch');
+          continue;
+        }
+        if (r.code !== 200) {
+          // Surface what Meta said — most common: 404 (ad deleted) or 400 (id
+          // doesn't exist / wrong type).
+          let errMsg = `HTTP ${r.code}`;
+          try {
+            const eBody = JSON.parse(r.body || '{}');
+            errMsg = eBody?.error?.message || eBody?.error?.error_user_msg || errMsg;
+          } catch { /* ignore */ }
+          console.warn(`[meta-graph] preview lookup failed aid=${aid} code=${r.code} msg=${errMsg}`);
+          meta[aid] = makeErrorMeta(aid, errMsg);
           continue;
         }
         try {
           const body = JSON.parse(r.body);
+          // Detect campaign vs ad. Campaigns have `objective`, ads have `creative`.
+          const isCampaign = !!body?.objective && !body?.creative;
+          if (isCampaign) {
+            const entry: CachedPreviewMeta = {
+              ad_id: aid,
+              ad_name: body?.name ? `Campaign: ${body.name}` : '(unnamed campaign)',
+              permalink_url: `https://www.facebook.com/ads/library/?search_type=keyword_unordered&id=${aid}`,
+              thumbnail_url: '',
+              video_id: '',
+              entity_kind: 'campaign',
+              error: 'aid is a campaign_id, not an ad_id (pre-Jun-10 attribution)',
+              fetched_at: new Date().toISOString(),
+            };
+            pipeline.set(`mim:preview:${aid}`, entry, { ex: PREVIEW_TTL_SECONDS });
+            pipelineDirty = true;
+            meta[aid] = { ...entry, cached: false };
+            continue;
+          }
           const permalink: string = body?.creative?.permalink_url || '';
           const storyId: string = body?.creative?.object_story_id || '';
           let url = '';
@@ -526,8 +557,17 @@ export async function getMetaAdPreviewUrls(
             url = `https://www.facebook.com/ads/library/?id=${aid}`;
           }
           const name: string = body?.name || body?.creative?.name || '';
+          // Thumbnail priority: top-level thumbnail → image_url → asset_feed_spec
+          // first video's thumbnail → asset_feed_spec first image → image_hash
+          // (constructed Graph URL — needs token, so only use if nothing else)
+          const afsVideos = body?.creative?.asset_feed_spec?.videos;
+          const afsImages = body?.creative?.asset_feed_spec?.images;
           const thumb: string =
-            body?.creative?.thumbnail_url || body?.creative?.image_url || '';
+            body?.creative?.thumbnail_url ||
+            body?.creative?.image_url ||
+            (Array.isArray(afsVideos) && afsVideos[0]?.thumbnail_url) ||
+            (Array.isArray(afsImages) && afsImages[0]?.url) ||
+            '';
           const videoId: string = String(body?.creative?.video_id || '');
           const entry: CachedPreviewMeta = {
             ad_id: aid,
@@ -535,37 +575,24 @@ export async function getMetaAdPreviewUrls(
             permalink_url: url,
             thumbnail_url: thumb,
             video_id: videoId,
+            entity_kind: 'ad',
+            error: name ? '' : 'meta returned ad but no name (unusual)',
             fetched_at: new Date().toISOString(),
           };
           pipeline.set(`mim:preview:${aid}`, entry, { ex: PREVIEW_TTL_SECONDS });
           pipelineDirty = true;
           meta[aid] = { ...entry, cached: false };
-        } catch {
-          meta[aid] = {
-            ad_id: aid,
-            ad_name: '',
-            permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
-            thumbnail_url: '',
-            video_id: '',
-            fetched_at: new Date().toISOString(),
-            cached: false,
-          };
+        } catch (parseErr: any) {
+          console.warn(`[meta-graph] parse failed aid=${aid}: ${parseErr?.message}`);
+          meta[aid] = makeErrorMeta(aid, `parse failed: ${parseErr?.message || parseErr}`);
         }
       }
       if (pipelineDirty) await pipeline.exec();
     } catch (err: any) {
-      for (const aid of chunk) {
-        meta[aid] = {
-          ad_id: aid,
-          ad_name: '',
-          permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
-          thumbnail_url: '',
-          video_id: '',
-          fetched_at: new Date().toISOString(),
-          cached: false,
-        };
-      }
       console.error('[meta-graph] preview metadata batch failed:', err?.message || err);
+      for (const aid of chunk) {
+        meta[aid] = makeErrorMeta(aid, `batch failed: ${err?.message || 'unknown'}`);
+      }
     }
   }
 
@@ -588,11 +615,27 @@ export async function getMetaAdPreviewUrls(
       permalink_url: m.permalink_url,
       thumbnail_url: m.thumbnail_url,
       video_id: m.video_id,
+      entity_kind: m.entity_kind || 'unknown',
+      error: m.error || '',
       fetched_at: m.fetched_at,
       cached: m.cached,
     };
   }
   return result;
+}
+
+function makeErrorMeta(aid: string, err: string): CachedPreviewMeta & { cached: boolean } {
+  return {
+    ad_id: aid,
+    ad_name: '',
+    permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
+    thumbnail_url: '',
+    video_id: '',
+    entity_kind: 'error',
+    error: err,
+    fetched_at: new Date().toISOString(),
+    cached: false,
+  };
 }
 
 export async function invalidateAdPreviewCache(ad_id: string): Promise<void> {
