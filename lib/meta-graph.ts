@@ -346,13 +346,108 @@ import { redis } from './redis';
 export interface AdPreviewInfo {
   ad_id: string;
   ad_name: string;
+  /** Direct FBCDN .mp4 URL (signed, expires in hours). Empty if creative isn't
+   *  a video or source couldn't be resolved. Prefer this when present. */
+  cdn_url: string;
+  /** Facebook permalink (/reel/<vid>/ or /post/...). Stable, doesn't expire.
+   *  Used as fallback when cdn_url is unavailable. */
   permalink_url: string;
   thumbnail_url: string;
+  /** Underlying creative.video_id, if any (used to refresh the signed cdn_url
+   *  without re-resolving the ad). */
+  video_id: string;
   fetched_at: string;
   cached: boolean;
 }
 
-const PREVIEW_TTL_SECONDS = 7 * 24 * 3600; // 7 days
+// Slowly-changing metadata (name/thumb/permalink/video_id) — 7 days.
+const PREVIEW_TTL_SECONDS = 7 * 24 * 3600;
+// Signed FBCDN URL — expires fast (typically 6-24h). Cache 30 min to absorb
+// burst loads but stay well within signature validity.
+const CDN_URL_TTL_SECONDS = 30 * 60;
+
+interface CachedPreviewMeta {
+  ad_id: string;
+  ad_name: string;
+  permalink_url: string;
+  thumbnail_url: string;
+  video_id: string;
+  fetched_at: string;
+}
+
+/** Resolve signed FBCDN source URLs for a list of video_ids via Graph batch.
+ *  Returns map of video_id → signed_url. Cached 30min in Redis.
+ *  This is the URL that looks like:
+ *    https://scontent.fdel52-1.fna.fbcdn.net/o1/v/.../AQ....mp4?...&oe=ABCD
+ */
+async function resolveVideoCdnUrls(
+  video_ids: string[],
+  token: string,
+  force_refresh: boolean
+): Promise<Record<string, string>> {
+  if (!video_ids.length) return {};
+  const result: Record<string, string> = {};
+  const toFetch: string[] = [];
+
+  if (!force_refresh) {
+    const keys = video_ids.map((v) => `mim:cdn:${v}`);
+    const cached = await redis.mget<string[]>(...keys);
+    for (let i = 0; i < video_ids.length; i++) {
+      const vid = video_ids[i];
+      const c = cached?.[i];
+      if (c && typeof c === 'string') {
+        result[vid] = c;
+      } else {
+        toFetch.push(vid);
+      }
+    }
+  } else {
+    toFetch.push(...video_ids);
+  }
+
+  if (!toFetch.length) return result;
+
+  for (let i = 0; i < toFetch.length; i += 50) {
+    const chunk = toFetch.slice(i, i + 50);
+    const batch = chunk.map((vid) => ({
+      method: 'GET',
+      relative_url: `${vid}?fields=source`,
+    }));
+    try {
+      const res = await axios.post(
+        `${GRAPH_BASE}/`,
+        new URLSearchParams({
+          access_token: token,
+          batch: JSON.stringify(batch),
+        }).toString(),
+        { headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, timeout: 30000 }
+      );
+      const responses: any[] = res.data || [];
+      const pipeline = redis.pipeline();
+      let dirty = false;
+      for (let j = 0; j < chunk.length; j++) {
+        const vid = chunk[j];
+        const r = responses[j];
+        if (!r || r.code !== 200) continue;
+        try {
+          const body = JSON.parse(r.body);
+          const src: string = body?.source || '';
+          if (src) {
+            result[vid] = src;
+            pipeline.set(`mim:cdn:${vid}`, src, { ex: CDN_URL_TTL_SECONDS });
+            dirty = true;
+          }
+        } catch {
+          /* skip */
+        }
+      }
+      if (dirty) await pipeline.exec();
+    } catch (err: any) {
+      console.error('[meta-graph] video source batch failed:', err?.message || err);
+    }
+  }
+  return result;
+}
 
 export async function getMetaAdPreviewUrls(
   ad_ids: string[],
@@ -362,18 +457,19 @@ export async function getMetaAdPreviewUrls(
   const token = getAccessToken(opts?.access_token);
   const force = opts?.force_refresh ?? false;
 
-  const result: Record<string, AdPreviewInfo> = {};
+  // Build map of ad_id → metadata (name, thumb, permalink, video_id).
+  // This metadata is slow-changing, so cache 7 days.
+  const meta: Record<string, CachedPreviewMeta & { cached: boolean }> = {};
   const toFetch: string[] = [];
 
-  // 1. Try cache
   if (!force) {
     const cacheKeys = ad_ids.map((id) => `mim:preview:${id}`);
-    const cached = await redis.mget<AdPreviewInfo[]>(...cacheKeys);
+    const cached = await redis.mget<CachedPreviewMeta[]>(...cacheKeys);
     for (let i = 0; i < ad_ids.length; i++) {
       const aid = ad_ids[i];
       const c = cached?.[i];
-      if (c && c.permalink_url) {
-        result[aid] = { ...c, cached: true };
+      if (c && c.ad_id) {
+        meta[aid] = { ...c, cached: true };
       } else {
         toFetch.push(aid);
       }
@@ -382,16 +478,11 @@ export async function getMetaAdPreviewUrls(
     toFetch.push(...ad_ids);
   }
 
-  if (!toFetch.length) return result;
-
-  // 2. Batch fetch via Graph batch API (up to 50 per call)
+  // 1. Fetch ad metadata (name, thumb, permalink, video_id) for uncached ads
   for (let i = 0; i < toFetch.length; i += 50) {
     const chunk = toFetch.slice(i, i + 50);
     const batch = chunk.map((aid) => ({
       method: 'GET',
-      // Pull everything we might use as a name source and as a thumbnail source.
-      // creative.thumbnail_url is the cleanest (auto-derived). image_url / picture
-      // are fallbacks for image ads / video ads where thumbnail isn't populated.
       relative_url: `${aid}?fields=name,creative{name,permalink_url,object_story_id,thumbnail_url,image_url,object_type,video_id}`,
     }));
     try {
@@ -410,16 +501,15 @@ export async function getMetaAdPreviewUrls(
         const aid = chunk[j];
         const r = responses[j];
         if (!r || r.code !== 200) {
-          // Couldn't fetch this ad — fall back to ads library URL
-          const fallback: AdPreviewInfo = {
+          meta[aid] = {
             ad_id: aid,
             ad_name: '',
             permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
             thumbnail_url: '',
+            video_id: '',
             fetched_at: new Date().toISOString(),
             cached: false,
           };
-          result[aid] = fallback;
           continue;
         }
         try {
@@ -435,60 +525,85 @@ export async function getMetaAdPreviewUrls(
           } else {
             url = `https://www.facebook.com/ads/library/?id=${aid}`;
           }
-          // Name priority: ad.name → creative.name → empty
           const name: string = body?.name || body?.creative?.name || '';
-          // Thumbnail priority: creative.thumbnail_url → creative.image_url → empty
           const thumb: string =
-            body?.creative?.thumbnail_url ||
-            body?.creative?.image_url ||
-            '';
-          const entry: AdPreviewInfo = {
+            body?.creative?.thumbnail_url || body?.creative?.image_url || '';
+          const videoId: string = String(body?.creative?.video_id || '');
+          const entry: CachedPreviewMeta = {
             ad_id: aid,
             ad_name: name,
             permalink_url: url,
             thumbnail_url: thumb,
+            video_id: videoId,
             fetched_at: new Date().toISOString(),
-            cached: false,
           };
           pipeline.set(`mim:preview:${aid}`, entry, { ex: PREVIEW_TTL_SECONDS });
           pipelineDirty = true;
-          result[aid] = entry;
+          meta[aid] = { ...entry, cached: false };
         } catch {
-          result[aid] = {
+          meta[aid] = {
             ad_id: aid,
             ad_name: '',
             permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
             thumbnail_url: '',
+            video_id: '',
             fetched_at: new Date().toISOString(),
             cached: false,
           };
         }
       }
-      if (pipelineDirty) {
-        await pipeline.exec();
-      }
+      if (pipelineDirty) await pipeline.exec();
     } catch (err: any) {
-      // On batch failure, just return ad-library fallback URLs for the chunk
       for (const aid of chunk) {
-        result[aid] = {
+        meta[aid] = {
           ad_id: aid,
           ad_name: '',
           permalink_url: `https://www.facebook.com/ads/library/?id=${aid}`,
           thumbnail_url: '',
+          video_id: '',
           fetched_at: new Date().toISOString(),
           cached: false,
         };
       }
-      console.error('[meta-graph] preview batch failed:', err?.message || err);
+      console.error('[meta-graph] preview metadata batch failed:', err?.message || err);
     }
   }
 
+  // 2. For all ads with a video_id, resolve the signed FBCDN source URL.
+  // Signed URLs expire; cache 30 min. Force-refresh bypasses both layers.
+  const videoIdsToResolve = Array.from(
+    new Set(Object.values(meta).map((m) => m.video_id).filter((v) => !!v))
+  );
+  const cdnUrls = await resolveVideoCdnUrls(videoIdsToResolve, token, force);
+
+  // 3. Compose final result
+  const result: Record<string, AdPreviewInfo> = {};
+  for (const aid of ad_ids) {
+    const m = meta[aid];
+    if (!m) continue;
+    result[aid] = {
+      ad_id: m.ad_id,
+      ad_name: m.ad_name,
+      cdn_url: m.video_id ? cdnUrls[m.video_id] || '' : '',
+      permalink_url: m.permalink_url,
+      thumbnail_url: m.thumbnail_url,
+      video_id: m.video_id,
+      fetched_at: m.fetched_at,
+      cached: m.cached,
+    };
+  }
   return result;
 }
 
 export async function invalidateAdPreviewCache(ad_id: string): Promise<void> {
   try {
-    await redis.del(`mim:preview:${ad_id}`);
+    // Also fetch video_id from the metadata cache so we can clear the CDN
+    // URL cache too — otherwise the next read returns the stale signed URL.
+    const meta = await redis.get<CachedPreviewMeta>(`mim:preview:${ad_id}`);
+    const pipeline = redis.pipeline();
+    pipeline.del(`mim:preview:${ad_id}`);
+    if (meta?.video_id) pipeline.del(`mim:cdn:${meta.video_id}`);
+    await pipeline.exec();
   } catch (err) {
     console.error('[meta-graph] invalidateAdPreviewCache failed:', err);
   }

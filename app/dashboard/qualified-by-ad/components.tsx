@@ -174,7 +174,8 @@ export function QualifiedByAdTable(props: { data: any }) {
 
 function AdRow(props: { row: any; stages: string[] }) {
   const [refreshing, setRefreshing] = useState(false);
-  const [previewUrl, setPreviewUrl] = useState(props.row.preview_url);
+  const [cdnUrl, setCdnUrl] = useState(props.row.cdn_url);
+  const [permalinkUrl, setPermalinkUrl] = useState(props.row.preview_url);
   const [thumbnailUrl, setThumbnailUrl] = useState(props.row.thumbnail_url);
   const [adName, setAdName] = useState(props.row.ad_name);
   const [cached, setCached] = useState(props.row.preview_cached);
@@ -189,7 +190,8 @@ function AdRow(props: { row: any; stages: string[] }) {
         body: JSON.stringify({ ad_id: props.row.ad_id }),
       });
       const j = await res.json();
-      if (j.permalink_url) setPreviewUrl(j.permalink_url);
+      if (j.cdn_url !== undefined) setCdnUrl(j.cdn_url);
+      if (j.permalink_url) setPermalinkUrl(j.permalink_url);
       if (j.thumbnail_url) setThumbnailUrl(j.thumbnail_url);
       if (j.ad_name) setAdName(j.ad_name);
       setCached(false);
@@ -202,6 +204,9 @@ function AdRow(props: { row: any; stages: string[] }) {
 
   const isMeta = props.row.is_meta;
   const displayName = adName || props.row.ad_name || (isMeta ? `(ad ${props.row.ad_id})` : props.row.ad_name);
+  // Prefer the direct FBCDN video URL; fall back to permalink for image ads
+  // or when the CDN URL hasn't been resolved.
+  const linkUrl = cdnUrl || permalinkUrl;
 
   return (
     <tr style={{ borderTop: '1px solid #eee' }}>
@@ -209,7 +214,7 @@ function AdRow(props: { row: any; stages: string[] }) {
       <td style={td('center', 80, true)}>
         {isMeta && thumbnailUrl ? (
           <a
-            href={previewUrl || '#'}
+            href={linkUrl || '#'}
             target="_blank"
             rel="noopener noreferrer"
             title={`Open ad preview: ${displayName}`}
@@ -277,9 +282,9 @@ function AdRow(props: { row: any; stages: string[] }) {
       <td style={td('left', 300)}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            {isMeta && previewUrl ? (
+            {isMeta && linkUrl ? (
               <a
-                href={previewUrl}
+                href={linkUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
@@ -289,7 +294,7 @@ function AdRow(props: { row: any; stages: string[] }) {
                   flex: 1,
                   wordBreak: 'break-word',
                 }}
-                title={previewUrl}
+                title={cdnUrl ? `FBCDN video: ${cdnUrl.slice(0, 80)}…` : permalinkUrl}
               >
                 {displayName}
               </a>
@@ -302,7 +307,7 @@ function AdRow(props: { row: any; stages: string[] }) {
               <button
                 onClick={refreshOne}
                 disabled={refreshing}
-                title="Re-fetch this ad's name, thumbnail and preview URL from Meta"
+                title="Re-fetch this ad's name, thumbnail and signed FBCDN URL from Meta"
                 style={{
                   padding: '2px 6px',
                   fontSize: 10,
@@ -322,6 +327,8 @@ function AdRow(props: { row: any; stages: string[] }) {
           <div style={{ fontSize: 11, color: '#888' }}>
             {props.row.channel}
             {props.row.ad_id && <> · <code style={{ fontSize: 10 }}>{props.row.ad_id}</code></>}
+            {isMeta && cdnUrl && <> · <span style={{ color: '#16794c' }}>fbcdn</span></>}
+            {isMeta && !cdnUrl && permalinkUrl && <> · <span style={{ color: '#888' }}>permalink</span></>}
             {isMeta && cached && <> · <span style={{ color: '#aaa' }}>cached</span></>}
           </div>
         </div>

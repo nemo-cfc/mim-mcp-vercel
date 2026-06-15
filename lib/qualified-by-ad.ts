@@ -56,9 +56,14 @@ export interface QualifiedByAdRow {
   ad_id: string;
   ad_name: string;
   channel: string;
+  /** Direct FBCDN .mp4 URL for video ads (signed, ~6-24h validity). Preferred
+   *  link target when present. */
+  cdn_url: string;
+  /** Facebook permalink (/reel/<vid>/ or /post). Stable fallback. */
   preview_url: string;
   preview_cached: boolean;
   thumbnail_url: string;
+  video_id: string;
   is_meta: boolean;
   total_qualified: number;
   /** Stage label → count (only columns in QUALIFIED_STAGE_COLUMNS). */
@@ -115,9 +120,11 @@ export async function buildQualifiedByAdReport(opts: {
     ad_id: '',
     ad_name: '(no ad ID — non-Meta or untagged)',
     channel: 'Unattributed',
+    cdn_url: '',
     preview_url: '',
     preview_cached: false,
     thumbnail_url: '',
+    video_id: '',
     is_meta: false,
     total_qualified: 0,
     stages: {},
@@ -138,9 +145,11 @@ export async function buildQualifiedByAdReport(opts: {
           ad_id: aid,
           ad_name: l.creative_name || `(ad ${aid})`,
           channel: l.channel,
+          cdn_url: '',
           preview_url: '',
           preview_cached: false,
           thumbnail_url: '',
+          video_id: '',
           is_meta: true,
           total_qualified: 0,
           stages: {},
@@ -162,9 +171,11 @@ export async function buildQualifiedByAdReport(opts: {
           ad_id: '',
           ad_name: `(channel: ${key})`,
           channel: key,
+          cdn_url: '',
           preview_url: '',
           preview_cached: false,
           thumbnail_url: '',
+          video_id: '',
           is_meta: false,
           total_qualified: 0,
           stages: {},
@@ -192,12 +203,13 @@ export async function buildQualifiedByAdReport(opts: {
   for (const [aid, row] of byAd.entries()) {
     const p = previews[aid];
     if (p) {
+      row.cdn_url = p.cdn_url;
       row.preview_url = p.permalink_url;
       row.preview_cached = p.cached;
       row.thumbnail_url = p.thumbnail_url;
+      row.video_id = p.video_id;
       if (p.ad_name && p.ad_name.length > 0) row.ad_name = p.ad_name;
     } else {
-      // No preview info — provide ads library fallback
       row.preview_url = `https://www.facebook.com/ads/library/?id=${aid}`;
     }
   }
